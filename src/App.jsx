@@ -4,6 +4,10 @@ import { BUILTIN_RIVERS, DEFAULT_RIVER, normalizeRiver } from './rivers.js';
 import GENERAL from '../data/general.json';
 import GEAR from '../data/gear.json';
 import SEED from '../data/trip.json';
+import GC_REF from '../data/trips/gc2026-ref.json';
+
+// read-only reference material per trip (imported from the planning sheet)
+const REFS = { [GC_REF.id]: GC_REF };
 
 /* ---------- active river ---------- */
 // The views read these module-level bindings. selectRiver() points them at one
@@ -24,7 +28,7 @@ selectRiver(BUILTIN_RIVERS[DEFAULT_RIVER]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const now = () => Date.now();
 const KINDS = ['crew', 'boats', 'cars', 'places', 'gear', 'meals', 'log', 'pay', 'plans'];
-const SLOTS = ['Breakfast', 'Lunch', 'Dinner', 'Happy hour'];
+const SLOTS = ['Breakfast', 'Lunch', 'Snack', 'Dinner', 'Happy hour'];
 const EVAC = { 1: '#6b6154', 2: '#a8722a', 3: '#c0562f', 4: '#9c3326' };
 
 /* dates */
@@ -102,6 +106,18 @@ const clean = (h) =>
 
 const LOCAL = 'riverguide.v1';
 
+function mergeSeed(have) {
+  if ((have.at || 0) <= 2) return SEED;
+  const next = { ...have };
+  ['gear', 'meals', 'pay'].forEach((k) => {
+    if (!(have[k] || []).length) next[k] = SEED[k];
+  });
+  next.plans = { ...have.plans };
+  Object.entries(SEED.plans).forEach(([d, p]) => (next.plans[d] = { ...p, ...(have.plans || {})[d] }));
+  if (!(have.boats || []).some((b) => b.id === 'b4')) next.boats = [...(have.boats || []), ...SEED.boats.filter((b) => b.id === 'b4')];
+  return { ...next, at: now() };
+}
+
 function useStore() {
   const [state, setState] = useState(() => {
     let st = { trips: [], active: null, rivers: {} };
@@ -109,9 +125,18 @@ function useStore() {
       st = JSON.parse(localStorage.getItem(LOCAL)) || st;
     } catch {}
     try {
-      if (!localStorage.getItem(LOCAL + '.seed2')) {
+      // .seed3: the seeded trip now carries the planning-sheet data. A copy nobody has edited
+      // (at <= 2) is replaced outright; an edited copy keeps its own data and only gets the
+      // sheet's gear, menu, payments and day notes where it has none.
+      if (!localStorage.getItem(LOCAL + '.seed3')) {
+        localStorage.setItem(LOCAL + '.seed3', SEED.id);
         localStorage.setItem(LOCAL + '.seed2', SEED.id);
-        st = { ...st, trips: [SEED, ...st.trips.filter((x) => x.id !== SEED.id)], active: SEED.id };
+        const have = st.trips.find((x) => x.id === SEED.id);
+        st = {
+          ...st,
+          trips: [have ? mergeSeed(have) : SEED, ...st.trips.filter((x) => x.id !== SEED.id)],
+          active: have ? st.active || SEED.id : SEED.id,
+        };
         localStorage.setItem(LOCAL, JSON.stringify(st));
       }
     } catch {}
@@ -297,11 +322,11 @@ const Field = ({ label, area, ...p }) => (
 function Trip({ s }) {
   const [tab, setTab] = useState('Itinerary');
   if (!s.trip) return <NewTrip s={s} />;
-  const panels = { Itinerary, 'Crew & Crafts': Crew, Meals, Gear, Shuttle, Ledger, Log, Trip: Settings };
+  const panels = { Itinerary, 'Crew & Crafts': Crew, Meals, Gear, Shuttle, Ledger, Log, Info, Trip: Settings };
   const P = panels[tab];
   return (
     <>
-      <Tabs items={['Itinerary', 'Crew & Crafts', 'Meals', 'Gear', 'Shuttle', 'Ledger', 'Log', 'Trip']} value={tab} onChange={setTab} tint="#7a3b28" />
+      <Tabs items={['Itinerary', 'Crew & Crafts', 'Meals', 'Gear', 'Shuttle', 'Ledger', 'Log', 'Info', 'Trip']} value={tab} onChange={setTab} tint="#7a3b28" />
       <div className="pad">
         <P s={s} />
       </div>
@@ -396,6 +421,7 @@ function Itinerary({ s }) {
               </div>
             )}
             {meals.length > 0 && <div className="line mt">{meals.map((m) => m.name || m.slot).join(' · ')}</div>}
+            <Sky t={t} date={d.date} />
             <Field
               area
               className="mt"
@@ -407,6 +433,23 @@ function Itinerary({ s }) {
         );
       })}
     </>
+  );
+}
+
+// Sunrise-to-sunrise sky log (stars, planets, moon) from the trip's reference data
+function Sky({ t, date }) {
+  const ev = ((REFS[t.id] || {}).celestial || []).filter((e) => e[0].startsWith(date));
+  if (!ev.length) return null;
+  return (
+    <Acc title="Sky" note={`${ev.length} events`}>
+      {ev.map((e, i) => (
+        <div className="line" key={i}>
+          <span className="mile">{e[0].slice(11)}</span> {e[1]}
+          {e[2] ? ` · ${e[2]}°` : ''}
+          {e[3] ? <span className="muted"> {e[3]}</span> : null}
+        </div>
+      ))}
+    </Acc>
   );
 }
 
@@ -890,6 +933,7 @@ function GearRow({ it, s, me, open, onOpen }) {
             <span>{+it.rent.toFixed(2)} rented</span>
             <span className="grTotal">{it.total ? usd(it.total) : '$0'}</span>
           </div>
+          {it.raw.note ? <div className="muted">{it.raw.note}</div> : null}
           {it.loose > 0.005 && <div className="muted">{usd(it.loose)} unassigned — nobody has claimed this item.</div>}
           <button className="btn ghost danger mt-s" onClick={() => s.drop('gear', it.id)}>
             Remove
@@ -2141,6 +2185,59 @@ function Ledger({ s }) {
   );
 }
 
+const REF_NOTE = {
+  'Shopping list': 'Draft list from the sheet. The day names (Friday, Saturday...) predate the current menu dates, so match items to meals by name.',
+  'Crew Council': 'Notes are kept as recorded; plans changed over time, so check the Itinerary and Shuttle tabs for the current plan.',
+};
+
+function InfoSection({ sec }) {
+  return (
+    <Acc title={sec.title} note={sec.kv ? null : sec.rows ? `${sec.rows.length}` : null}>
+      {sec.kv && <Pairs data={sec.kv} />}
+      {sec.rows &&
+        sec.rows.map((r, i) => (
+          <div className="pair" key={i}>
+            <div className="pairKey">{r[0]}</div>
+            {sec.cols.slice(1).map((c, j) =>
+              r[j + 1] ? (
+                <div className="line" key={j}>
+                  <span className="muted">{c}: </span>
+                  {r[j + 1]}
+                </div>
+              ) : null
+            )}
+          </div>
+        ))}
+      {sec.text && <div className="line pre">{sec.text}</div>}
+      {sec.foot ? <div className="muted mt">{sec.foot}</div> : null}
+    </Acc>
+  );
+}
+
+function Info({ s }) {
+  const ref = REFS[s.trip.id];
+  const groups = ref ? [...new Set(ref.sections.map((x) => x.group))] : [];
+  const [g, setG] = useState(groups[0]);
+  if (!ref) return <div className="muted">No reference notes for this trip.</div>;
+  return (
+    <>
+      <div className="chips">
+        {groups.map((x) => (
+          <button key={x} className={'chip' + (g === x ? ' on' : '')} onClick={() => setG(x)}>
+            {x}
+          </button>
+        ))}
+      </div>
+      {REF_NOTE[g] ? <div className="muted mt">{REF_NOTE[g]}</div> : null}
+      <div className="mt">
+        {ref.sections.filter((x) => x.group === g).map((x, i) => (
+          <InfoSection sec={x} key={g + i} />
+        ))}
+      </div>
+    </>
+  );
+}
+
 function Log({ s }) {
   const [text, setText] = useState('');
   const [date, setDate] = useState(today());
@@ -2206,6 +2303,20 @@ function Settings({ s }) {
               <span style={x.id === t.id ? { fontWeight: 700 } : null}>{x.name}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {t.id === SEED.id && (
+        <div className="mt">
+          <button
+            className="btn ghost"
+            onClick={() =>
+              window.confirm('Replace crew, boats, cars, gear, meals, payments and day notes with the planning-sheet data? Your log entries are kept.') &&
+              s.set({ crew: SEED.crew, boats: SEED.boats, cars: SEED.cars, places: SEED.places, gear: SEED.gear, meals: SEED.meals, pay: SEED.pay, plans: SEED.plans })
+            }
+          >
+            Reload planning-sheet data
+          </button>
         </div>
       )}
 

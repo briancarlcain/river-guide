@@ -42,3 +42,13 @@ take-outs, hubs: `{name, mile?, road?, hub?, park?, note?}`), and optional
   `riverguide.v1.seed2`. If you change the seed trip's shape, bump that key.
 - Access points get ids `r0, r1, ...` by position in `access[]`; trips refer to
   launch/take-out by those ids, so append rather than reorder.
+
+## Grand Canyon 2026 trip data
+
+`data/trip.json` (crew, boats, cars, gear with per-person quantities, menu, payments, day notes) and
+`data/trips/gc2026-ref.json` (read-only Info tab: constraints, camp jobs, Ceiba Q&A, shopping list,
+Crew Council agendas and minutes, education plan, and the sunrise-to-sunrise sky log shown on each
+Itinerary day) were generated from the planning spreadsheet. Course logins from the sheet are
+deliberately not copied. Seed key `riverguide.v1.seed3`: a never-edited seeded trip is replaced; an
+edited one keeps its data and only gets the sheet's gear, menu, payments and day notes where empty.
+Trip > Trip > "Reload planning-sheet data" replaces everything from the seed.
