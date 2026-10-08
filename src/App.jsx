@@ -114,6 +114,9 @@ function mergeSeed(have) {
   ['gear', 'meals', 'pay'].forEach((k) => {
     if (!(have[k] || []).length) next[k] = SEED[k];
   });
+  // the sheet's NPS-pass shares were corrected (1/7 each -> 1 each); update copies still holding the old import
+  const nps = SEED.gear.find((g) => /^National Park Service/.test(g.n));
+  next.gear = (next.gear || []).map((g) => (nps && /^National Park Service/.test(g.n) && Object.values(g.e || {}).some((v) => v.need === 0.1428571429) ? { ...g, e: nps.e } : g));
   next.plans = { ...have.plans };
   Object.entries(SEED.plans).forEach(([d, p]) => (next.plans[d] = { ...p, ...(have.plans || {})[d] }));
   if (!(next.boats || []).some((b) => b.id === 'b4')) next.boats = [...(next.boats || []), ...SEED.boats.filter((b) => b.id === 'b4')];
@@ -127,10 +130,11 @@ function useStore() {
       st = JSON.parse(localStorage.getItem(LOCAL)) || st;
     } catch {}
     try {
-      // .seed4 (re-runs the .seed3 merge, which skipped crew/crafts): the seeded trip now carries the planning-sheet data. A copy nobody has edited
+      // .seed5 (re-runs the merge: .seed4 filled crew/crafts, .seed5 corrects the NPS-pass shares): the seeded trip now carries the planning-sheet data. A copy nobody has edited
       // (at <= 2) is replaced outright; an edited copy keeps its own data and only gets the
       // sheet's gear, menu, payments and day notes where it has none.
-      if (!localStorage.getItem(LOCAL + '.seed4')) {
+      if (!localStorage.getItem(LOCAL + '.seed5')) {
+        localStorage.setItem(LOCAL + '.seed5', SEED.id);
         localStorage.setItem(LOCAL + '.seed4', SEED.id);
         localStorage.setItem(LOCAL + '.seed3', SEED.id);
         localStorage.setItem(LOCAL + '.seed2', SEED.id);
