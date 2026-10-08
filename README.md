@@ -49,6 +49,6 @@ take-outs, hubs: `{name, mile?, road?, hub?, park?, note?}`), and optional
 `data/trips/gc2026-ref.json` (read-only Info tab: constraints, camp jobs, Ceiba Q&A, shopping list,
 Crew Council agendas and minutes, education plan, and the sunrise-to-sunrise sky log shown on each
 Itinerary day) were generated from the planning spreadsheet. Course logins from the sheet are
-deliberately not copied. Seed key `riverguide.v1.seed3`: a never-edited seeded trip is replaced; an
+deliberately not copied. Seed key `riverguide.v1.seed4`: a never-edited seeded trip is replaced; an
 edited one keeps its data and only gets the sheet's gear, menu, payments and day notes where empty.
 Trip > Trip > "Reload planning-sheet data" replaces everything from the seed.

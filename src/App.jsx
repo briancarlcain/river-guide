@@ -109,12 +109,14 @@ const LOCAL = 'riverguide.v1';
 function mergeSeed(have) {
   if ((have.at || 0) <= 2) return SEED;
   const next = { ...have };
+  // no crew yet = the empty trip from the first release: take the sheet's crew, crafts, cars and places
+  if (!(have.crew || []).length) ['crew', 'boats', 'cars', 'places'].forEach((k) => (next[k] = SEED[k]));
   ['gear', 'meals', 'pay'].forEach((k) => {
     if (!(have[k] || []).length) next[k] = SEED[k];
   });
   next.plans = { ...have.plans };
   Object.entries(SEED.plans).forEach(([d, p]) => (next.plans[d] = { ...p, ...(have.plans || {})[d] }));
-  if (!(have.boats || []).some((b) => b.id === 'b4')) next.boats = [...(have.boats || []), ...SEED.boats.filter((b) => b.id === 'b4')];
+  if (!(next.boats || []).some((b) => b.id === 'b4')) next.boats = [...(next.boats || []), ...SEED.boats.filter((b) => b.id === 'b4')];
   return { ...next, at: now() };
 }
 
@@ -125,10 +127,11 @@ function useStore() {
       st = JSON.parse(localStorage.getItem(LOCAL)) || st;
     } catch {}
     try {
-      // .seed3: the seeded trip now carries the planning-sheet data. A copy nobody has edited
+      // .seed4 (re-runs the .seed3 merge, which skipped crew/crafts): the seeded trip now carries the planning-sheet data. A copy nobody has edited
       // (at <= 2) is replaced outright; an edited copy keeps its own data and only gets the
       // sheet's gear, menu, payments and day notes where it has none.
-      if (!localStorage.getItem(LOCAL + '.seed3')) {
+      if (!localStorage.getItem(LOCAL + '.seed4')) {
+        localStorage.setItem(LOCAL + '.seed4', SEED.id);
         localStorage.setItem(LOCAL + '.seed3', SEED.id);
         localStorage.setItem(LOCAL + '.seed2', SEED.id);
         const have = st.trips.find((x) => x.id === SEED.id);
