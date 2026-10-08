@@ -1,0 +1,15 @@
+{
+  "name": "Smith River",
+  "reach": "Camp Baker to Eagle Creek",
+  "agency": "Montana FWP / Lewis & Clark National Forest",
+  "miles": [0, 59],
+  "days": 4,
+  "coords": [46.89, -111.17],
+  "tz": "America/Denver",
+  "note": "Starter record: reach, mileage and put-in/take-out only (coordinates approximate). Permits are by lottery through Montana FWP. Add rapids, camps and hikes from your guidebook with the editor on the Rivers tab, or import a river JSON.",
+  "access": [
+    { "name": "Great Falls", "road": true, "hub": true, "note": "Nearest city / airport; shuttle base" },
+    { "name": "Camp Baker", "road": true, "mile": 0, "park": true, "note": "Put-in" },
+    { "name": "Eagle Creek", "road": true, "mile": 59, "park": true, "note": "Take-out" }
+  ]
+}

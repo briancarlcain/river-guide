@@ -1,0 +1,16 @@
+{
+  "name": "river-guide",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Multi-river, multi-trip planning app",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

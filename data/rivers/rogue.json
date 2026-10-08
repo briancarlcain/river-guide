@@ -1,0 +1,15 @@
+{
+  "name": "Rogue River",
+  "reach": "Grave Creek to Foster Bar",
+  "agency": "BLM Medford District / Rogue River-Siskiyou National Forest",
+  "miles": [0, 34],
+  "days": 4,
+  "coords": [42.64, -123.6],
+  "tz": "America/Los_Angeles",
+  "note": "Starter record: reach, mileage (from Grave Creek) and put-in/take-out only (coordinates approximate). Wild section floats require a BLM permit in the summer season. Add rapids, camps and lodges from your guidebook with the editor on the Rivers tab, or import a river JSON.",
+  "access": [
+    { "name": "Grants Pass", "road": true, "hub": true, "note": "Nearest city; shuttle base" },
+    { "name": "Grave Creek", "road": true, "mile": 0, "park": true, "note": "Put-in" },
+    { "name": "Foster Bar", "road": true, "mile": 34, "park": true, "note": "Take-out" }
+  ]
+}
