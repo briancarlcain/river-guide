@@ -322,16 +322,16 @@ const Field = ({ label, area, ...p }) => (
 
 /* ---------- trip ---------- */
 
-function Trip({ s }) {
+function Trip({ s, back }) {
   const [tab, setTab] = useState('Itinerary');
   if (!s.trip) return <NewTrip s={s} />;
-  const panels = { Itinerary, 'Crew & Crafts': Crew, Meals, Gear, Shuttle, Ledger, Log, Info, Trip: Settings };
+  const panels = { Itinerary, 'Crew & Crafts': Crew, Meals, Gear, Shuttle, Ledger, Log, Info, Settings };
   const P = panels[tab];
   return (
     <>
-      <Tabs items={['Itinerary', 'Crew & Crafts', 'Meals', 'Gear', 'Shuttle', 'Ledger', 'Log', 'Info', 'Trip']} value={tab} onChange={setTab} tint="#7a3b28" />
+      <Tabs items={['Itinerary', 'Crew & Crafts', 'Meals', 'Gear', 'Shuttle', 'Ledger', 'Log', 'Info', 'Settings']} value={tab} onChange={setTab} tint="#7a3b28" />
       <div className="pad">
-        <P s={s} />
+        <P s={s} back={back} />
       </div>
     </>
   );
@@ -2275,7 +2275,7 @@ function Log({ s }) {
   );
 }
 
-function Settings({ s }) {
+function Settings({ s, back }) {
   const t = s.trip;
   return (
     <>
@@ -2298,17 +2298,6 @@ function Settings({ s }) {
         ))}
       </Sel>
 
-      {s.trips.length > 1 && (
-        <div className="mt">
-          <span className="label">Trips</span>
-          {s.trips.map((x) => (
-            <button className="pick" key={x.id} onClick={() => s.activate(x.id)}>
-              <span style={x.id === t.id ? { fontWeight: 700 } : null}>{x.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
       {t.id === SEED.id && (
         <div className="mt">
           <button
@@ -2324,11 +2313,15 @@ function Settings({ s }) {
       )}
 
       <div className="row mt">
-        <button className="btn ghost" onClick={() => s.create({ name: 'Untitled', start: today(), days: 7, river: riverOf(t) })}>
-          New trip
-        </button>
-        <button className="btn ghost danger" onClick={() => s.remove(t.id)}>
-          Delete
+        <button
+          className="btn ghost danger"
+          onClick={() => {
+            if (!window.confirm(`Delete "${t.name}"? This cannot be undone.`)) return;
+            s.remove(t.id);
+            back && back();
+          }}
+        >
+          Delete trip
         </button>
       </div>
     </>
@@ -3661,16 +3654,6 @@ const TABS = [
     ),
   },
   {
-    id: 'Trip',
-    tab: 'itinerary',
-    icon: (
-      <svg viewBox="0 0 24 24">
-        <rect x="3" y="5" width="18" height="16" rx="2" />
-        <path d="M3 9h18M8 3v4M16 3v4" />
-      </svg>
-    ),
-  },
-  {
     id: 'River',
     tab: 'map',
     icon: (
@@ -3695,10 +3678,12 @@ const TABS = [
 
 function App() {
   const s = useStore();
-  const [tab, setTab] = useState('Trip');
+  const [tab, setTab] = useState('Trips');
+  const [inTrip, setInTrip] = useState(false); // Trips tab: false = overview list, true = inside the active trip
   const [browse, setBrowse] = useState(null); // river being browsed on the River tab (null = the trip's own)
   const [preset, setPreset] = useState(null); // river chosen from the library for a new trip
   const onMap = tab === 'River';
+  const detail = tab === 'Trips' && inTrip && !!s.trip;
 
   useEffect(() => setBrowse(null), [s.trip?.id]);
 
@@ -3709,8 +3694,10 @@ function App() {
 
   // the rock-art motif behind the page is keyed off body[data-tab]
   useEffect(() => {
-    document.body.dataset.tab = TABS.find((t) => t.id === tab).tab;
-  }, [tab]);
+    document.body.dataset.tab = detail ? 'itinerary' : TABS.find((t) => t.id === tab).tab;
+  }, [tab, detail]);
+
+  const title = detail ? s.trip.name : tab === 'Trips' ? 'Trips' : 'Rafting & Safety';
 
   return (
     <div className={'shell rg' + (onMap ? ' onmap' : '')}>
@@ -3718,13 +3705,22 @@ function App() {
 
       {!onMap && (
         <div className="pageHeader" style={{ display: 'flex' }}>
-          <div className="phtitle">{tab === 'Trip' ? s.trip?.name || 'Trip' : tab === 'Trips' ? 'Trips' : 'Rafting & Safety'}</div>
+          {detail && (
+            <button className="hback" onClick={() => setInTrip(false)} aria-label="Back to all trips">
+              ‹ Trips
+            </button>
+          )}
+          <div className="phtitle">{title}</div>
         </div>
       )}
 
       <main key={rid}>
-        {tab === 'Trips' && <Trips s={s} preset={preset} clearPreset={() => setPreset(null)} onOpen={() => setTab('Trip')} />}
-        {tab === 'Trip' && <Trip s={s} />}
+        {tab === 'Trips' &&
+          (detail ? (
+            <Trip s={s} back={() => setInTrip(false)} />
+          ) : (
+            <Trips s={s} preset={preset} clearPreset={() => setPreset(null)} onOpen={() => setInTrip(true)} />
+          ))}
         {tab === 'River' && (
           <River
             s={s}
@@ -3732,6 +3728,7 @@ function App() {
             onBrowse={setBrowse}
             onPlan={(id) => {
               setPreset(id);
+              setInTrip(false);
               setTab('Trips');
             }}
           />
@@ -3741,7 +3738,14 @@ function App() {
 
       <nav className="tabbar">
         {TABS.map((t) => (
-          <button key={t.id} className={'tabbtn' + (tab === t.id ? ' on' : '')} onClick={() => setTab(t.id)}>
+          <button
+            key={t.id}
+            className={'tabbtn' + (tab === t.id ? ' on' : '')}
+            onClick={() => {
+              if (t.id === 'Trips') setInTrip(false); // tapping Trips always returns to the overview
+              setTab(t.id);
+            }}
+          >
             {t.icon}
             <span className="tlabel">{t.id}</span>
           </button>
