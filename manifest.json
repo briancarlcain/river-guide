@@ -1,0 +1,23 @@
+{
+ "name": "Grand Canyon River Guide",
+ "short_name": "River Guide",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "background_color": "#f5eede",
+ "theme_color": "#f5eede",
+ "orientation": "portrait",
+ "icons": [
+  {
+   "src": "icon-180.png",
+   "sizes": "180x180",
+   "type": "image/png"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any maskable"
+  }
+ ]
+}
