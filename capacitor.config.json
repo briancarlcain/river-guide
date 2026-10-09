@@ -1,0 +1,21 @@
+{
+  "appId": "com.briancarlcain.riverguide",
+  "appName": "River Guide",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#f5eede",
+    "preferredContentMode": "mobile"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": false,
+      "backgroundColor": "#f5eede",
+      "showSpinner": false,
+      "launchFadeOutDuration": 200
+    },
+    "Keyboard": {
+      "resize": "native"
+    }
+  }
+}

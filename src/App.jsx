@@ -2,9 +2,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client';
 import { BUILTIN_RIVERS, DEFAULT_RIVER, normalizeRiver } from './rivers.js';
 import GENERAL from '../data/general.json';
-import GEAR from '../data/gear.json';
+import GEAR_ALL from '../data/gear.json';
 import SEED from '../data/trip.json';
 import GC_REF from '../data/trips/gc2026-ref.json';
+import { askReminders, boot, clearReminders, hideSplash, isNative, openUrl, remindersAllowed, saveBackup, scheduleReminders, shareText, success } from './native.js';
+
+// set by build.mjs: the App Store build ships a fictional sample trip, never the crew's real one
+const IS_STORE = typeof __STORE__ !== 'undefined' && __STORE__;
+const APP_VERSION = typeof __VERSION__ !== 'undefined' ? __VERSION__ : 'dev';
+const POLICY_URL = 'https://briancarlcain.github.io/river-guide/privacy.html';
+const SUPPORT_URL = 'https://github.com/briancarlcain/river-guide/issues';
+// outfitter-specific price lines are left out of the public catalog
+const GEAR = IS_STORE ? GEAR_ALL.filter((g) => !/Ceiba|^Truck & Trailer|^Van Passenger|^Shuttle -|^Vehicle Shuttle|Gear (Pickup|Delivery) Tip|^Parking -|^Hualapai/i.test(g.n)) : GEAR_ALL;
 
 // read-only reference material per trip (imported from the planning sheet)
 const REFS = { [GC_REF.id]: GC_REF };
@@ -279,6 +288,20 @@ function useStore() {
       const ids = [...Object.keys(BUILTIN_RIVERS), ...Object.keys(state.rivers).filter((k) => !BUILTIN_RIVERS[k])];
       return ids.map((id) => ({ id, ...(state.rivers[id] || BUILTIN_RIVERS[id]), custom: !BUILTIN_RIVERS[id], edited: !!(BUILTIN_RIVERS[id] && state.rivers[id]) }));
     },
+    // merge a backup file into the current state (newer copy of a trip wins)
+    restore: (data) => {
+      const byId = new Map(trips.map((t) => [t.id, t]));
+      const incoming = (data.trips || []).filter((t) => t && t.id && t.name);
+      incoming.forEach((t) => {
+        const o = byId.get(t.id);
+        if (!o || (t.at || 0) > (o.at || 0)) byId.set(t.id, { crew: [], boats: [], cars: [], places: [], gear: [], meals: [], log: [], pay: [], plans: {}, ...t });
+      });
+      const list = [...byId.values()];
+      persist({ ...state, trips: list, rivers: { ...state.rivers, ...(data.rivers || {}) }, active: state.active || list[0]?.id || null });
+      incoming.forEach(write);
+      return incoming.length;
+    },
+    wipe: () => persist({ trips: [], active: null, rivers: {} }),
     riverRec: (id) => state.rivers[id] || BUILTIN_RIVERS[id] || { id, name: 'Unknown river' },
     saveRiver: (r) => {
       const rec = { ...r, id: r.id || uid(), at: now() };
@@ -2360,6 +2383,18 @@ function Log({ s }) {
   );
 }
 
+function tripSummary(t, riverName) {
+  const days = tripDays(t);
+  const lines = [t.name, `${riverName} · ${okDate(t.start) ? fmt(t.start) + ' ' + t.start.slice(0, 4) : t.start} · ${t.days + 1} days`, ''];
+  if ((t.crew || []).length) lines.push(`Crew (${t.crew.length}): ${t.crew.map((c) => c.name).join(', ')}`, '');
+  const camps = days.filter((d) => (t.plans || {})[d.i]?.camp);
+  if (camps.length) {
+    lines.push('Camps');
+    camps.forEach((d) => lines.push(`  ${d.label.replace(/^Day (\d+) · /, 'Day $1 · ')}: ${t.plans[d.i].camp}`));
+  }
+  return lines.join('\n').trim();
+}
+
 function Settings({ s, back }) {
   const t = s.trip;
   return (
@@ -2386,7 +2421,7 @@ function Settings({ s, back }) {
         </Sel>
       </div>
 
-      {t.id === SEED.id && (
+      {t.id === SEED.id && !IS_STORE && (
         <div className="card formCard mt">
           <span className="label">Planning sheet</span>
           <div className="muted mb-s">Replaces crew, boats, cars, gear, meals, payments and day notes with the data from the planning spreadsheet. Log entries are kept.</div>
@@ -2401,6 +2436,20 @@ function Settings({ s, back }) {
           </button>
         </div>
       )}
+
+      <div className="card formCard mt">
+        <span className="label">Share</span>
+        <div className="muted mb-s">Send a plain-text summary of this trip (dates, crew, camps) with Messages, Mail or Notes.</div>
+        <button
+          className="btn ghost"
+          onClick={async () => {
+            const r = await shareText(t.name, tripSummary(t, s.riverRec(riverOf(t)).name));
+            if (r === 'copied') window.alert('Trip summary copied to the clipboard.');
+          }}
+        >
+          <Icon name="copy" size={16} /> Share trip summary
+        </button>
+      </div>
 
       <div className="card formCard dangerCard mt">
         <span className="label">Danger zone</span>
@@ -3164,11 +3213,119 @@ const Rules = () =>
 
 /* ---------- general ---------- */
 
+const REMINDERS_KEY = 'riverguide.v1.reminders';
+
+function About({ s }) {
+  const [msg, setMsg] = useState('');
+  const [rem, setRem] = useState(() => localStorage.getItem(REMINDERS_KEY) === '1');
+  const file = useRef(null);
+
+  const backup = async () => {
+    const data = { app: 'river-guide', format: 1, exported: new Date().toISOString(), trips: s.trips, rivers: s.rivers };
+    const ok = await saveBackup(`river-guide-backup-${today()}.json`, JSON.stringify(data));
+    setMsg(ok ? 'Backup ready.' : 'Could not create the backup.');
+  };
+  const restore = async (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      if (data.app !== 'river-guide' || !Array.isArray(data.trips)) throw new Error('not a River Guide backup');
+      const n = s.restore(data);
+      success();
+      setMsg(`Restored ${n} trip${n === 1 ? '' : 's'}.`);
+    } catch (err) {
+      setMsg('That file is not a River Guide backup.');
+    }
+  };
+  const toggleRem = async () => {
+    if (rem) {
+      localStorage.setItem(REMINDERS_KEY, '0');
+      setRem(false);
+      await clearReminders();
+      setMsg('Reminders off.');
+      return;
+    }
+    if (!(await remindersAllowed()) && !(await askReminders())) {
+      setMsg('Notifications are off for River Guide. Turn them on in Settings → Notifications.');
+      return;
+    }
+    localStorage.setItem(REMINDERS_KEY, '1');
+    setRem(true);
+    const n = await scheduleReminders(s.trips);
+    setMsg(n ? `Reminders set for ${n} upcoming date${n === 1 ? '' : 's'}.` : 'Reminders on. They will appear for trips that have not started yet.');
+  };
+
+  return (
+    <>
+      <div className="card formCard">
+        <span className="label">River Guide</span>
+        <div className="line">Plan river trips: crew, itinerary, meals, gear, shuttles and costs, with built-in guides for the Grand Canyon, Smith River and Rogue River.</div>
+        <div className="muted mt-s">Version {APP_VERSION}</div>
+      </div>
+
+      <div className="card formCard mt">
+        <span className="label">Your data</span>
+        <div className="muted mb-s">Everything you enter stays on this device. River Guide has no account and does not collect or send your information. Back up regularly: if you delete the app, the data goes with it.</div>
+        <button className="btn ghost block" onClick={backup}>
+          Back up all trips
+        </button>
+        <button className="btn ghost block" onClick={() => file.current && file.current.click()}>
+          Restore from backup
+        </button>
+        <input ref={file} type="file" accept="application/json,.json" hidden onChange={restore} />
+        {msg ? <div className="muted mb-s">{msg}</div> : null}
+      </div>
+
+      {isNative && (
+        <div className="card formCard mt">
+          <span className="label">Trip reminders</span>
+          <div className="muted mb-s">A notification a week before launch, the evening before, and on launch morning.</div>
+          <button className={'btn ' + (rem ? '' : 'ghost')} onClick={toggleRem}>
+            {rem ? 'Reminders on' : 'Turn on reminders'}
+          </button>
+        </div>
+      )}
+
+      <div className="card formCard mt">
+        <span className="label">Safety &amp; sources</span>
+        <div className="muted mb-s">River, camp and hike information is compiled from public agency publications (such as the National Park Service) and community knowledge. It can be out of date or wrong. Medical and rescue pages are general reference only. Always confirm current regulations, flows and conditions with the managing agency, and carry a satellite communicator.</div>
+      </div>
+
+      <div className="card formCard mt">
+        <span className="label">Help</span>
+        <button className="btn ghost block" onClick={() => openUrl(POLICY_URL)}>
+          Privacy policy
+        </button>
+        <button className="btn ghost block" onClick={() => openUrl(SUPPORT_URL)}>
+          Support &amp; feedback
+        </button>
+      </div>
+
+      <div className="card formCard dangerCard mt">
+        <span className="label">Erase</span>
+        <div className="muted mb-s">Deletes every trip and any rivers you added from this device.</div>
+        <button
+          className="btn ghost danger"
+          onClick={() => {
+            if (!window.confirm('Delete ALL trips and custom rivers from this device? This cannot be undone.')) return;
+            s.wipe();
+            setMsg('All data erased.');
+          }}
+        >
+          <Icon name="trash" size={16} /> Erase all data
+        </button>
+      </div>
+    </>
+  );
+}
+
 function General({ s }) {
   const [tab, setTab] = useState('Medical');
   return (
     <>
-      <Tabs items={['Medical', 'Signals', 'Rescue', 'Swim', 'Gear', 'Card']} value={tab} onChange={setTab} tint="#9c3326" />
+      <Tabs items={['Medical', 'Signals', 'Rescue', 'Swim', 'Gear', 'Card', 'About']} value={tab} onChange={setTab} tint="#9c3326" />
       <div className="pad">
         {tab === 'Medical' && <Medical />}
         {tab === 'Signals' && <Pairs data={GENERAL.signals} />}
@@ -3176,8 +3333,22 @@ function General({ s }) {
         {tab === 'Swim' && <Pairs data={GENERAL.swim} />}
         {tab === 'Gear' && <GearRef />}
         {tab === 'Card' && <Card s={s} />}
+        {tab === 'About' && <About s={s} />}
       </div>
     </>
+  );
+}
+
+function Disclaimer() {
+  return (
+    <div className="notice mb">
+      <div className="noticeHead">
+        <Icon name="alert" size={17} /> Reference only
+      </div>
+      <div className="muted">
+        This is general wilderness first-aid and river-safety reference, not medical advice, and it does not replace training, a first-aid course or professional care. In an emergency call 911 or use your satellite communicator's SOS. Conditions, regulations and permit rules change; confirm them with the managing agency before you launch.
+      </div>
+    </div>
   );
 }
 
@@ -3199,6 +3370,7 @@ function Medical() {
   );
   return (
     <>
+      <Disclaimer />
       <Field value={q} onChange={(e) => setQ(e.target.value)} placeholder="Symptom or condition" />
       {groups.map((g) => (
         <div className="mt" key={g.name}>
@@ -3800,6 +3972,11 @@ function App() {
 
   useEffect(() => setBrowse(null), [s.trip?.id]);
 
+  // keep trip reminders in step with the trip list (only if the user opted in)
+  useEffect(() => {
+    if (isNative && localStorage.getItem(REMINDERS_KEY) === '1') scheduleReminders(s.trips);
+  }, [s.trips]);
+
   // Trip screens use the trip's river; the River tab can browse any river.
   const tripRid = riverOf(s.trip);
   const rid = onMap ? browse || tripRid : tripRid;
@@ -3868,4 +4045,7 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+boot().finally(() => {
+  createRoot(document.getElementById('root')).render(<App />);
+  setTimeout(hideSplash, 150);
+});

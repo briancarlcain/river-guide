@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2c98a"/>
+      <stop offset="0.55" stop-color="#e59a5a"/>
+      <stop offset="1" stop-color="#c8643a"/>
+    </linearGradient>
+    <linearGradient id="far" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b6502f"/>
+      <stop offset="1" stop-color="#8a3320"/>
+    </linearGradient>
+    <linearGradient id="near" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7a2417"/>
+      <stop offset="1" stop-color="#4a130c"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#sky)"/>
+  <circle cx="512" cy="372" r="150" fill="#fbf1d8" opacity="0.95"/>
+  <!-- far canyon walls -->
+  <path d="M0 470 L120 430 L210 470 L300 520 L380 560 L512 600 L644 560 L724 520 L814 470 L904 430 L1024 470 L1024 1024 L0 1024 Z" fill="url(#far)"/>
+  <!-- near canyon walls, stepped -->
+  <path d="M0 560 L70 540 L110 600 L190 610 L230 680 L320 690 L380 760 L452 770 L512 1024 L0 1024 Z" fill="url(#near)"/>
+  <path d="M1024 560 L954 540 L914 600 L834 610 L794 680 L704 690 L644 760 L572 770 L512 1024 L1024 1024 Z" fill="url(#near)"/>
+  <path d="M440 760 L584 760 L660 1024 L420 1024 Z" fill="url(#near)"/>
+  <!-- river -->
+  <path d="M470 770 C 520 800 430 840 500 880 C 570 920 450 960 520 1024 L 640 1024 C 560 960 680 920 610 880 C 540 840 640 800 580 770 Z" fill="#f6e6c3"/>
+  <path d="M520 800 C 560 830 500 850 540 880" fill="none" stroke="#e59a5a" stroke-width="6" stroke-linecap="round" opacity="0.6"/>
+</svg>
