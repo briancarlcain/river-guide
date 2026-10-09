@@ -25,6 +25,58 @@ function selectRiver(rec) {
 }
 selectRiver(BUILTIN_RIVERS[DEFAULT_RIVER]);
 
+/* ---------- icons ---------- */
+// 24px stroke icons (Lucide set, ISC licence)
+const ICONS = {
+  sunrise: 'M12 2v8M4.93 10.93l1.41 1.41M2 18h2M20 18h2M19.07 10.93l-1.41 1.41M22 22H2M8 6l4-4 4 4M16 18a4 4 0 0 0-8 0',
+  sunset: 'M12 10V2M4.93 10.93l1.41 1.41M2 18h2M20 18h2M19.07 10.93l-1.41 1.41M22 22H2M16 6l-4 4-4-4M16 18a4 4 0 0 0-8 0',
+  chevron: 'M6 9l6 6 6-6',
+  back: 'M15 18l-6-6 6-6',
+  plus: 'M12 5v14M5 12h14',
+  close: 'M18 6L6 18M6 6l12 12',
+  trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6',
+  copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
+  calendar: 'M3 5h18v16H3zM3 10h18M8 3v4M16 3v4',
+  users: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M21 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
+  pin: 'M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12zM12 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5',
+  inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z',
+  check: 'M20 6L9 17l-5-5',
+  alert: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
+};
+const Icon = ({ name, size = 18, className = '' }) => (
+  <svg className={'ico ' + className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d={ICONS[name]} />
+  </svg>
+);
+
+const SunTimes = ({ rise, set }) => (
+  <span className="sun">
+    <span className="sunUp">
+      <Icon name="sunrise" size={20} />
+      <span className="sr">Sunrise </span>
+      {rise}
+    </span>
+    <span className="sunDown">
+      <Icon name="sunset" size={20} />
+      <span className="sr">Sunset </span>
+      {set}
+    </span>
+  </span>
+);
+
+const Avatar = ({ name }) => {
+  const w = String(name || '?').trim().split(/\s+/);
+  return <span className="avatar">{((w[0] || '?')[0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase()}</span>;
+};
+
+const Empty = ({ icon = 'inbox', title, children }) => (
+  <div className="empty">
+    <Icon name={icon} size={30} />
+    <div className="emptyTitle">{title}</div>
+    {children ? <div className="emptyText">{children}</div> : null}
+  </div>
+);
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const now = () => Date.now();
 const KINDS = ['crew', 'boats', 'cars', 'places', 'gear', 'meals', 'log', 'pay', 'plans'];
@@ -294,17 +346,18 @@ const Tabs = ({ items, value, onChange, tint }) => (
   </div>
 );
 
-function Acc({ title, note, tag, children, open: start }) {
+function Acc({ title, note, tag, lead, children, open: start }) {
   const [open, setOpen] = useState(!!start);
   return (
-    <div className="acc">
+    <div className={'acc' + (open ? ' open' : '')}>
       <button className="accHead" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {lead}
         <span className="accText">
           <span className="accTitle">{title}</span>
-          {note ? <span className="muted">{note}</span> : null}
+          {note ? <span className={'accNote' + (typeof note === 'string' ? ' clamp' : '')}>{note}</span> : null}
         </span>
         {tag}
-        <span className="chev">{open ? '−' : '+'}</span>
+        <Icon name="chevron" size={18} className="chev" />
       </button>
       {open ? <div className="accBody">{children}</div> : null}
     </div>
@@ -373,6 +426,7 @@ function Itinerary({ s }) {
         {L ? L.name : 'Launch'} → {O ? O.name : 'take-out'} · {RIVER.name}
       </div>
       <Stats s={s} />
+      <div className="card formCard mb">
       <div className="row">
         <Field label="Launch" type="date" value={t.start} onChange={(e) => okDate(e.target.value) && s.set({ start: e.target.value })} />
         <Field
@@ -385,7 +439,7 @@ function Itinerary({ s }) {
           }}
         />
       </div>
-      <div className="row mb">
+      <div className="stack">
         <Sel label="Put in at" value={t.launch || ramps[0]?.id} onChange={(v) => s.set({ launch: v })}>
           {ramps.map((p) => (
             <option key={p.id} value={p.id}>
@@ -401,6 +455,8 @@ function Itinerary({ s }) {
           ))}
         </Sel>
       </div>
+      </div>
+      <span className="label sectionLabel">Day by day</span>
       {tripDays(t).map((d) => {
         const p = t.plans[d.i] || {};
         const prev = t.plans[d.i - 1] || {};
@@ -413,8 +469,19 @@ function Itinerary({ s }) {
           <Acc
             key={d.i}
             title={d.label}
-            note={p.camp ? `${p.camp}${leg != null ? ` · ${leg} mi` : ''}` : null}
-            tag={sn ? <Tag label={`${clock(sn.rise)}–${clock(sn.set)}`} tint="#9d9385" /> : null}
+            note={
+              sn || p.camp ? (
+                <>
+                  {p.camp ? (
+                    <span className="accCamp">
+                      <Icon name="pin" size={13} /> {p.camp}
+                      {leg != null ? ` · ${leg} mi` : ''}
+                    </span>
+                  ) : null}
+                  {sn ? <SunTimes rise={clock(sn.rise)} set={clock(sn.set)} /> : null}
+                </>
+              ) : null
+            }
           >
             <CampPick min={from} current={p.camp} onPick={(c) => s.plan(d.i, { camp: c.name, mile: c.mile })} />
             {runs.length > 0 && (
@@ -564,7 +631,7 @@ function Crew({ s }) {
         </button>
       </div>
       {t.crew.map((m) => (
-        <Acc key={m.id} title={m.name} note={[m.role, boats.find((b) => b.id === m.boat)?.name].filter(Boolean).join(' · ') || null}>
+        <Acc key={m.id} lead={<Avatar name={m.name} />} title={m.name} note={[m.role, boats.find((b) => b.id === m.boat)?.name].filter(Boolean).join(' · ') || null}>
           <Field label="Role" value={m.role} onChange={(e) => s.patch('crew', m.id, { role: e.target.value })} />
           <Sel label="Craft" value={m.boat} onChange={(v) => s.patch('crew', m.id, { boat: v })}>
             <option value="">—</option>
@@ -700,8 +767,9 @@ function Meals({ s }) {
               return (
                 <div className="mealBlock" key={slot}>
                   <span className="label">{slot}</span>
-                  <Field value={m.name} onChange={(e) => s.patch('meals', m.id, { name: e.target.value })} placeholder="Dish" />
-                  <div className="chips">
+                  <Field label="Dish" value={m.name} onChange={(e) => s.patch('meals', m.id, { name: e.target.value })} placeholder="Dish" />
+                  <span className="label">Cook</span>
+                  <div className="chips scroll">
                     {t.crew.map((c) => (
                       <button
                         key={c.id}
@@ -714,6 +782,7 @@ function Meals({ s }) {
                   </div>
                   <Field
                     area
+                    label="Shopping items (one per line)"
                     value={m.items}
                     onChange={(e) => s.patch('meals', m.id, { items: e.target.value })}
                     placeholder={'3 lb ground beef\n2 onions'}
@@ -844,7 +913,7 @@ function Gear({ s }) {
       {t.crew.length === 0 ? (
         <div className="muted mb">Add crew on the Crew tab to split costs.</div>
       ) : (
-        <div className="chips">
+        <div className="chips scroll">
           {t.crew.map((c) => (
             <button key={c.id} className={'chip' + (me === c.id ? ' on' : '')} onClick={() => setMe(me === c.id ? '' : c.id)}>
               {c.name}
@@ -871,7 +940,7 @@ function Gear({ s }) {
         </button>
       </div>
       {adding && <AddGear s={s} onDone={() => setAdding(false)} />}
-      <div className="chips">
+      <div className="chips scroll">
         {cats.map((c) => (
           <button key={c} className={'chip' + (cat === c ? ' on river' : '')} onClick={() => setCat(c)}>
             {c}
@@ -1876,11 +1945,18 @@ function Shuttle({ s }) {
   return (
     <>
       <Stage S={S} s={s} />
-      {warn.map((w, i) => (
-        <div className="warn mt-s" key={i}>
-          {w}
+      {warn.length > 0 && (
+        <div className="notice mt">
+          <div className="noticeHead">
+            <Icon name="alert" size={17} /> {warn.length === 1 ? '1 thing to check' : `${warn.length} things to check`}
+          </div>
+          <ul>
+            {warn.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
         </div>
-      ))}
+      )}
 
       <span className="label mt">Plan</span>
       {days.map((d) => {
@@ -2199,7 +2275,7 @@ const REF_NOTE = {
 
 function InfoSection({ sec }) {
   return (
-    <Acc title={sec.title} note={sec.kv ? null : sec.rows ? `${sec.rows.length}` : null}>
+    <Acc title={sec.title}>
       {sec.kv && <Pairs data={sec.kv} />}
       {sec.rows &&
         sec.rows.map((r, i) => (
@@ -2228,7 +2304,7 @@ function Info({ s }) {
   if (!ref) return <div className="muted">No reference notes for this trip.</div>;
   return (
     <>
-      <div className="chips">
+      <div className="chips scroll">
         {groups.map((x) => (
           <button key={x} className={'chip' + (g === x ? ' on' : '')} onClick={() => setG(x)}>
             {x}
@@ -2252,7 +2328,7 @@ function Log({ s }) {
     <>
       <Field area value={text} onChange={(e) => setText(e.target.value)} placeholder="Today" />
       <div className="row">
-        <Field value={date} onChange={(e) => setDate(e.target.value)} className="narrow" />
+        <Field type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         <button
           className="btn"
           disabled={!text.trim()}
@@ -2264,6 +2340,11 @@ function Log({ s }) {
           Save
         </button>
       </div>
+      {!s.trip.log.length && (
+        <Empty icon="inbox" title="No log entries yet">
+          Jot down the day's river notes, hazards and wildlife sightings here.
+        </Empty>
+      )}
       {[...s.trip.log].reverse().map((e) => (
         <div className="entry" key={e.id}>
           <div className="entryHead">
@@ -2283,27 +2364,32 @@ function Settings({ s, back }) {
   const t = s.trip;
   return (
     <>
-      <Field label="Name" value={t.name} onChange={(e) => s.set({ name: e.target.value })} />
-      <Field label="Permit holder" value={t.permit ?? ''} onChange={(e) => s.set({ permit: e.target.value })} />
-      <Sel
-        label="River"
-        value={riverOf(t)}
-        onChange={(v) => {
-          const planned = Object.values(t.plans || {}).some((p) => p.camp);
-          if (planned && !window.confirm('Switching rivers clears the launch, take-out and camp picks for this trip. Continue?')) return;
-          const plans = Object.fromEntries(Object.entries(t.plans || {}).map(([k, p]) => [k, { ...p, camp: undefined }]));
-          s.set({ river: v, launch: undefined, out: undefined, plans });
-        }}
-      >
-        {s.riverList().map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.name}
-          </option>
-        ))}
-      </Sel>
+      <div className="card formCard">
+        <span className="label">Trip details</span>
+        <Field label="Name" value={t.name} onChange={(e) => s.set({ name: e.target.value })} />
+        <Field label="Permit holder" value={t.permit ?? ''} onChange={(e) => s.set({ permit: e.target.value })} />
+        <Sel
+          label="River"
+          value={riverOf(t)}
+          onChange={(v) => {
+            const planned = Object.values(t.plans || {}).some((p) => p.camp);
+            if (planned && !window.confirm('Switching rivers clears the launch, take-out and camp picks for this trip. Continue?')) return;
+            const plans = Object.fromEntries(Object.entries(t.plans || {}).map(([k, p]) => [k, { ...p, camp: undefined }]));
+            s.set({ river: v, launch: undefined, out: undefined, plans });
+          }}
+        >
+          {s.riverList().map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </Sel>
+      </div>
 
       {t.id === SEED.id && (
-        <div className="mt">
+        <div className="card formCard mt">
+          <span className="label">Planning sheet</span>
+          <div className="muted mb-s">Replaces crew, boats, cars, gear, meals, payments and day notes with the data from the planning spreadsheet. Log entries are kept.</div>
           <button
             className="btn ghost"
             onClick={() =>
@@ -2316,7 +2402,9 @@ function Settings({ s, back }) {
         </div>
       )}
 
-      <div className="row mt">
+      <div className="card formCard dangerCard mt">
+        <span className="label">Danger zone</span>
+        <div className="muted mb-s">Deleting a trip removes its crew, gear, meals and log for everyone it is shared with.</div>
         <button
           className="btn ghost danger"
           onClick={() => {
@@ -2325,7 +2413,7 @@ function Settings({ s, back }) {
             back && back();
           }}
         >
-          Delete trip
+          <Icon name="trash" size={16} /> Delete trip
         </button>
       </div>
     </>
@@ -3248,6 +3336,15 @@ function NewTrip({ s, preset, onDone, onCancel }) {
   );
 }
 
+function tripStatus(t) {
+  if (!okDate(t.start)) return null;
+  const toStart = dnum(t.start, today());
+  const into = -toStart;
+  if (toStart > 0) return { cls: 'soon', text: toStart === 1 ? 'Tomorrow' : `In ${toStart} days` };
+  if (into <= t.days) return { cls: 'live', text: `Day ${into + 1} of ${t.days + 1}` };
+  return { cls: 'done', text: 'Completed' };
+}
+
 function Trips({ s, preset, clearPreset, onOpen }) {
   const [adding, setAdding] = useState(!!preset);
   useEffect(() => {
@@ -3273,11 +3370,15 @@ function Trips({ s, preset, clearPreset, onOpen }) {
           }}
         />
       ) : (
-        <button className="btn" onClick={() => setAdding(true)}>
-          + New trip
+        <button className="btn block" onClick={() => setAdding(true)}>
+          <Icon name="plus" size={16} /> New trip
         </button>
       )}
-      {!s.trips.length && !adding ? <div className="muted mt">No trips yet. Create one to start planning.</div> : null}
+      {!s.trips.length && !adding ? (
+        <Empty icon="calendar" title="No trips yet">
+          Create a trip to start planning crew, gear, meals and shuttles.
+        </Empty>
+      ) : null}
       {groups.map((g) => (
         <div className="mt" key={g}>
           <span className="label">{rname(g)}</span>
@@ -3286,11 +3387,19 @@ function Trips({ s, preset, clearPreset, onOpen }) {
             .sort((a, b) => (a.start < b.start ? 1 : -1))
             .map((t) => (
               <div className="card mt" key={t.id}>
-                <div className="serif" style={t.id === s.trip?.id ? { fontWeight: 700 } : null}>
-                  {t.name}
+                <div className="cardTop">
+                  <div className="serif">{t.name}</div>
+                  {tripStatus(t) ? <span className={'badge ' + tripStatus(t).cls}>{tripStatus(t).text}</span> : null}
                 </div>
-                <div className="muted">
-                  {okDate(t.start) ? `${fmt(t.start)} ${t.start.slice(0, 4)} → ${fmt(addDays(t.start, t.days))}` : t.start} · {t.days} days · {(t.crew || []).length} people
+                <div className="meta">
+                  <span>
+                    <Icon name="calendar" size={15} />
+                    {okDate(t.start) ? `${fmt(t.start)} ${t.start.slice(0, 4)} → ${fmt(addDays(t.start, t.days))}` : t.start}
+                  </span>
+                  <span>
+                    <Icon name="users" size={15} />
+                    {(t.crew || []).length} people · {t.days} days
+                  </span>
                 </div>
                 <div className="row mt">
                   <button
@@ -3711,7 +3820,7 @@ function App() {
         <div className="pageHeader" style={{ display: 'flex' }}>
           {detail && (
             <button className="hback" onClick={() => setInTrip(false)} aria-label="Back to all trips">
-              ‹ Trips
+              <Icon name="back" size={18} /> Trips
             </button>
           )}
           <div className="phtitle">{title}</div>

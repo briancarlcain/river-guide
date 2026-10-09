@@ -23,7 +23,8 @@ const js = result.outputFiles[0].text.replace(/<\/script/gi, '<\/script');
 const shell = readFileSync('src/shell.html', 'utf8');
 const cut = shell.indexOf('<div id="root">');
 if (cut < 0) throw new Error('shell.html: <div id="root"> not found');
-const head = shell.slice(0, cut);
+const ui = readFileSync('src/ui.css', 'utf8');
+const head = shell.slice(0, cut).replace(/<\/style>\s*$/, () => `\n/* ---- ui.css ---- */\n${ui}\n</style>\n`);
 const body = shell.slice(cut).replace(/<script src="app\.js"><\/script>/, () => `<script>${js}</script>`);
 if (!body.includes(js.slice(0, 40))) throw new Error('shell.html: <script src="app.js"> not found');
 

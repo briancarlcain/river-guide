@@ -15,7 +15,8 @@ trips (localStorage, and the shared db when available).
 
 - `src/App.jsx` - the whole app (React, single file)
 - `src/rivers.js` - river library (built-ins + `normalizeRiver`)
-- `src/shell.html` - page shell: fonts, textures, all CSS, `<div id="root">`
+- `src/shell.html` - page shell: fonts, textures, base CSS, `<div id="root">`
+- `src/ui.css` - UI polish layer (type scale, unified form controls, 44px tap targets, cards, buttons); inlined after the shell CSS by the build
 - `data/rivers/*.json` - built-in river records
 - `data/gear.json`, `data/general.json`, `data/trip.json` - gear catalog, safety reference, seeded Grand Canyon trip
 - `build.mjs` - bundles `App.jsx` with esbuild, inlines it into the shell and wraps it in a full HTML document -> `index.html`
