@@ -3,14 +3,19 @@
 // hash (see the shared_trips functions in supabase/migrations). Merging happens on the
 // device (merge.js); the server just stores versions and rejects stale writes.
 const BASE = 'https://nhplgoetehrydaeoyrgz.supabase.co/rest/v1/rpc';
-const KEY = 'sb_publishable_eJ0X3vnbOK09gLhPigYiSQ_TWnyQrk3'; // publishable by design; safe to ship
+export const API_KEY = 'sb_publishable_eJ0X3vnbOK09gLhPigYiSQ_TWnyQrk3'; // publishable by design; safe to ship
+const KEY = API_KEY;
+
+// signed-in requests carry the user's access token; set by auth.js
+let tokenFn = async () => null;
+export const setTokenSource = (fn) => (tokenFn = fn);
 
 export const SYNC_ORIGIN = 'https://nhplgoetehrydaeoyrgz.supabase.co';
 
 async function rpc(fn, body) {
   const r = await fetch(`${BASE}/${fn}`, {
     method: 'POST',
-    headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
+    headers: { apikey: KEY, Authorization: `Bearer ${(await tokenFn()) || KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   const text = await r.text();
@@ -48,3 +53,11 @@ export const create = (code, owner, data) => rpc('share_create', { p_code: code,
 export const get = (code, have) => rpc('share_get', { p_code: code, p_have: have || 0 });
 export const put = (code, base, data) => rpc('share_put', { p_code: code, p_base: base, p_data: data });
 export const del = (code, owner) => rpc('share_delete', { p_code: code, p_owner: owner });
+
+// ---- account functions (signed-in users only) ----
+export const claim = (code, owner) => rpc('share_claim', { p_code: code, p_owner: owner });
+export const acctList = () => rpc('acct_list', {});
+export const acctGet = (id, have) => rpc('acct_get', { p_trip: id, p_have: have || 0 });
+export const acctPut = (id, base, data, share = null) => rpc('acct_put', { p_trip: id, p_base: base, p_data: data, p_share: share });
+export const acctDelete = (id) => rpc('acct_delete', { p_trip: id });
+export const deleteMe = () => rpc('delete_my_account', {});

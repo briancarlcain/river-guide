@@ -9,6 +9,7 @@ import GC_REF from '../data/trips/gc2026-ref.json';
 import { askReminders, boot, clearReminders, hideSplash, isNative, onOpenUrl, onResume, openUrl, remindersAllowed, saveBackup, saveFile, scheduleReminders, shareText, success } from './native.js';
 import { canon, mergeTrips, stamp } from './merge.js';
 import * as remote from './sync.js';
+import * as authApi from './auth.js';
 
 // set by build.mjs: the App Store build ships a fictional sample trip, never the crew's real one
 const IS_STORE = typeof __STORE__ !== 'undefined' && __STORE__;
@@ -203,6 +204,9 @@ function hash53(str) {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36) + ':' + str.length;
 }
 
+// "Erase all data" keeps the account link only if there is none to keep
+const st0cloud = () => null;
+
 function useStore() {
   const [state, setState] = useState(() => {
     let st = { trips: [], active: null, rivers: {} };
@@ -310,7 +314,154 @@ function useStore() {
     }
   }, [commit]);
 
-  const syncAll = useCallback(() => Object.keys(stateRef.current.sync || {}).forEach((id) => syncTrip(id)), [syncTrip]);
+  /* ---- account: back up and sync every trip across the signed-in user's devices ---- */
+  const [session, setSession] = useState(null);
+  const sessionRef = useRef(null);
+  const [cloudStatus, setCloudStatus] = useState('');
+  const cloudBusy = useRef(false);
+  const NOCLOUD = (id) => IS_STORE && id === SEED.id; // the fictional sample trip stays on the device
+
+  const dropLocal = (id) =>
+    commit((s0) => {
+      const trips = s0.trips.filter((t) => t.id !== id);
+      const { [id]: _a, ...sync } = s0.sync || {};
+      const ct = { ...((s0.cloud || {}).trips || {}) };
+      delete ct[id];
+      return { ...s0, trips, sync, cloud: s0.cloud ? { ...s0.cloud, trips: ct } : s0.cloud, active: s0.active === id ? trips[0]?.id ?? null : s0.active };
+    });
+
+  // info: this trip's row from acct_list (null = not on the server yet). opts.share: '' clears the stored join code.
+  const cloudSyncTrip = async (id, info, opts = {}) => {
+    const s0 = stateRef.current;
+    const cl = s0.cloud;
+    const local = s0.trips.find((t) => t.id === id);
+    if (!cl || !local || NOCLOUD(id)) return;
+    const ent = (cl.trips || {})[id] || { version: 0, h: '' };
+    let version = ent.version || 0;
+    let known = ent.h;
+    let doc = local;
+    let shareCode; // undefined = not fetched; null = fetched, trip not shared
+    if (info ? info.version > version : version > 0) {
+      const g = await remote.acctGet(id, version);
+      if (g && g.deleted) return dropLocal(id);
+      if (g && g.data) {
+        doc = mergeTrips(doc, g.data);
+        version = g.version;
+        known = hashOf(g.data);
+        shareCode = g.share_code;
+      }
+    }
+    const mine = (s0.sync || {})[id];
+    const share = opts.share !== undefined ? opts.share : mine && mine.owner ? mine.code : null;
+    if (hashOf(doc) !== known || opts.share !== undefined || (share && shareCode !== undefined && shareCode !== share)) {
+      let done = false;
+      for (let i = 0; i < 4 && !done; i++) {
+        const r = await remote.acctPut(id, version, withRiver(doc), share);
+        if (r.deleted) return dropLocal(id);
+        if (r.conflict) {
+          doc = mergeTrips(doc, r.data);
+          version = r.version;
+          shareCode = r.share_code;
+        } else {
+          version = r.version;
+          known = hashOf(doc);
+          done = true;
+        }
+      }
+      if (!done) throw new Error('busy');
+    }
+    commit((s1) => {
+      const cur = s1.trips.find((t) => t.id === id);
+      if (!cur) return s1;
+      const { _river: _r, ...merged } = mergeTrips(cur, doc);
+      let sync = s1.sync || {};
+      if (shareCode && !sync[id]) sync = { ...sync, [id]: { code: shareCode, owner: 'account', version: 0, h: '' } }; // shared from another device
+      if (shareCode === null && sync[id] && sync[id].owner === 'account' && opts.share === undefined) {
+        const { [id]: _g, ...rest } = sync; // sharing was stopped from another device
+        sync = rest;
+      }
+      return {
+        ...s1,
+        trips: s1.trips.map((t) => (t.id === id ? merged : t)),
+        rivers: adoptRiver(s1, doc),
+        sync,
+        cloud: { ...s1.cloud, trips: { ...s1.cloud.trips, [id]: { version, h: known } } },
+      };
+    });
+  };
+
+  const cloudSyncAll = useCallback(async () => {
+    const sess = sessionRef.current;
+    if (!sess || cloudBusy.current) return;
+    cloudBusy.current = true;
+    setCloudStatus('busy');
+    try {
+      if (!stateRef.current.cloud || stateRef.current.cloud.uid !== sess.user.id) {
+        // first sign-in on this device, or a different account: start with no links
+        commit((s0) => ({ ...s0, cloud: { uid: sess.user.id, trips: {}, del: [] } }));
+        // trips this device shared before signing in become the account's
+        for (const [id, e] of Object.entries(stateRef.current.sync || {})) if (e.owner && e.owner !== 'account') await remote.claim(e.code, e.owner).catch(() => {});
+      }
+      for (const id of [...(stateRef.current.cloud.del || [])]) {
+        await remote.acctDelete(id);
+        commit((s0) => ({ ...s0, cloud: { ...s0.cloud, del: s0.cloud.del.filter((x) => x !== id) } }));
+      }
+      const list = await remote.acctList();
+      const byId = new Map(list.map((r) => [r.trip_id, r]));
+      for (const r of list) {
+        const local = stateRef.current.trips.find((t) => t.id === r.trip_id);
+        if (r.deleted) {
+          if (local) dropLocal(r.trip_id);
+        } else if (!local) {
+          const g = await remote.acctGet(r.trip_id, 0);
+          if (g && g.data) {
+            const { _river, ...doc } = g.data;
+            commit((s0) => ({
+              ...s0,
+              trips: [{ crew: [], boats: [], cars: [], places: [], gear: [], meals: [], log: [], pay: [], plans: {}, ...doc }, ...s0.trips.filter((t) => t.id !== doc.id)],
+              rivers: adoptRiver(s0, g.data),
+              sync: g.share_code && !(s0.sync || {})[doc.id] ? { ...(s0.sync || {}), [doc.id]: { code: g.share_code, owner: 'account', version: 0, h: '' } } : s0.sync,
+              cloud: { ...s0.cloud, trips: { ...s0.cloud.trips, [doc.id]: { version: g.version, h: hashOf(g.data) } } },
+              active: s0.active || doc.id,
+            }));
+          }
+        }
+      }
+      for (const t of [...stateRef.current.trips]) if (!NOCLOUD(t.id)) await cloudSyncTrip(t.id, byId.get(t.id) && !byId.get(t.id).deleted ? byId.get(t.id) : null);
+      setCloudStatus('ok');
+    } catch {
+      setCloudStatus('offline');
+    } finally {
+      cloudBusy.current = false;
+    }
+  }, [commit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cloudTimers = useRef({});
+  const cloudSoon = (id) => {
+    if (!sessionRef.current || !(stateRef.current.cloud && stateRef.current.cloud.trips)) return;
+    clearTimeout(cloudTimers.current[id]);
+    cloudTimers.current[id] = setTimeout(() => cloudSyncTrip(id, undefined).catch(() => setCloudStatus('offline')), 1500);
+  };
+
+  useEffect(() => {
+    authApi.getSession().then((x) => {
+      sessionRef.current = x;
+      setSession(x);
+    }).catch(() => {});
+    return authApi.onSession((x) => {
+      sessionRef.current = x;
+      setSession(x);
+    });
+  }, []);
+  useEffect(() => {
+    if (session) cloudSyncAll();
+    else setCloudStatus('');
+  }, [session && session.user && session.user.id, cloudSyncAll]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const syncAll = useCallback(() => {
+    Object.keys(stateRef.current.sync || {}).forEach((id) => syncTrip(id));
+    cloudSyncAll();
+  }, [syncTrip, cloudSyncAll]);
   const syncSoon = (id) => {
     clearTimeout(timers.current[id]);
     timers.current[id] = setTimeout(() => syncTrip(id), 1500);
@@ -332,6 +483,7 @@ function useStore() {
     const next = stamp(trip, { ...fn({ ...trip }), at: t0 }, t0);
     persist({ ...stateRef.current, trips: stateRef.current.trips.map((t) => (t.id === next.id ? next : t)) });
     if ((stateRef.current.sync || {})[next.id]) syncSoon(next.id);
+    cloudSoon(next.id);
   };
 
   const shareTrip = async (id) => {
@@ -342,6 +494,7 @@ function useStore() {
     await remote.create(code, owner, withRiver(t));
     commit((s0) => ({ ...s0, sync: { ...(s0.sync || {}), [id]: { code, owner, version: 1, h: hashOf(t) } } }));
     setSt(id, 'ok');
+    if (sessionRef.current) cloudSyncTrip(id, undefined).catch(() => {});
     return code;
   };
   const joinTrip = async (raw) => {
@@ -364,6 +517,7 @@ function useStore() {
     });
     setSt(doc.id, 'ok');
     syncTrip(doc.id);
+    if (sessionRef.current) setTimeout(cloudSyncAll, 300);
     return doc.id;
   };
   const stopSharing = async (id) => {
@@ -374,6 +528,7 @@ function useStore() {
       const { [id]: _gone, ...rest } = s0.sync || {};
       return { ...s0, sync: rest };
     });
+    if (sessionRef.current) cloudSyncTrip(id, undefined, { share: '' }).catch(() => {});
     setStatus((m) => {
       const { [id]: _g, ...rest } = m;
       return rest;
@@ -387,6 +542,24 @@ function useStore() {
     sync: state.sync || {},
     syncStatus: status,
     syncNow: syncTrip,
+    session,
+    cloudStatus,
+    cloudNow: cloudSyncAll,
+    signOut: async (removeLocal) => {
+      await authApi.signOut();
+      const st = stateRef.current;
+      const gone = removeLocal ? new Set(Object.keys((st.cloud && st.cloud.trips) || {})) : new Set();
+      const trips = st.trips.filter((t) => !gone.has(t.id));
+      const sync = Object.fromEntries(Object.entries(st.sync || {}).filter(([k]) => !gone.has(k)));
+      persist({ ...st, trips, sync, cloud: null, active: gone.has(st.active) ? trips[0]?.id ?? null : st.active });
+    },
+    deleteAccount: async () => {
+      await remote.deleteMe();
+      await authApi.signOut();
+      const st = stateRef.current;
+      const sync = Object.fromEntries(Object.entries(st.sync || {}).filter(([, e]) => !e.owner)); // our shared copies were deleted with the account
+      persist({ ...st, sync, cloud: null });
+    },
     shareTrip,
     joinTrip,
     stopSharing,
@@ -406,9 +579,10 @@ function useStore() {
       });
       const list = [...byId.values()];
       persist({ ...st, trips: list, rivers: { ...st.rivers, ...(data.rivers || {}) }, active: st.active || list[0]?.id || null });
+      if (sessionRef.current) setTimeout(cloudSyncAll, 300);
       return incoming.length;
     },
-    wipe: () => persist({ trips: [], active: null, rivers: {}, sync: {} }),
+    wipe: () => persist({ trips: [], active: null, rivers: {}, sync: {}, cloud: st0cloud() }),
     riverRec: (id) => state.rivers[id] || BUILTIN_RIVERS[id] || { id, name: 'Unknown river' },
     saveRiver: (r) => {
       const rec = { ...r, id: r.id || uid(), at: now() };
@@ -437,12 +611,16 @@ function useStore() {
         ...t,
       };
       persist({ ...stateRef.current, trips: [next, ...stateRef.current.trips], active: next.id });
+      if (sessionRef.current) setTimeout(cloudSyncAll, 300); // back the new trip up
     },
     remove: (id) => {
       const st = stateRef.current;
       const list = st.trips.filter((t) => t.id !== id);
       const { [id]: _gone, ...sync } = st.sync || {}; // removing a trip only leaves the shared copy; use Stop sharing to delete it
-      persist({ ...st, trips: list, sync, active: id === st.active ? list[0]?.id ?? null : st.active });
+      const onAccount = st.cloud && st.cloud.trips && st.cloud.trips[id];
+      const cloud = st.cloud ? { ...st.cloud, trips: Object.fromEntries(Object.entries(st.cloud.trips || {}).filter(([k]) => k !== id)), del: onAccount ? [...(st.cloud.del || []), id] : st.cloud.del } : st.cloud;
+      persist({ ...st, trips: list, sync, cloud, active: id === st.active ? list[0]?.id ?? null : st.active });
+      if (onAccount) cloudSyncAll();
     },
     set: (patch) => edit((t) => ({ ...t, ...patch })),
     push: (key, item) => edit((t) => ({ ...t, [key]: [...(t[key] || []), { id: uid(), ...item }] })),
@@ -3412,6 +3590,139 @@ const Rules = () =>
 
 /* ---------- general ---------- */
 
+function Account({ s }) {
+  const [prov, setProv] = useState(null);
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [step, setStep] = useState('email'); // email -> code
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    authApi.loadProviders().then(setProv);
+  }, []);
+  const run = async (fn) => {
+    setBusy(true);
+    setMsg('');
+    try {
+      await fn();
+    } catch (e) {
+      setMsg(netMsg(e));
+    }
+    setBusy(false);
+  };
+  const user = s.session && s.session.user;
+  const stLabel = { busy: 'Syncing…', ok: 'Your trips are backed up and in sync', offline: 'Offline. Changes will sync when you are back online' }[s.cloudStatus] || '';
+
+  if (user) {
+    const name = (user.user_metadata && (user.user_metadata.full_name || user.user_metadata.name)) || '';
+    return (
+      <>
+        <div className="card formCard">
+          <span className="label">Signed in</span>
+          <div className="serif" style={{ marginBottom: 4 }}>{name || user.email}</div>
+          {name ? <div className="muted">{user.email}</div> : null}
+          {stLabel ? <div className="muted mt-s"><Icon name="cloud" size={14} /> {stLabel}</div> : null}
+          <div className="row mt">
+            <button className="btn ghost" onClick={() => s.cloudNow()}>
+              <Icon name="refresh" size={16} /> Sync now
+            </button>
+          </div>
+        </div>
+        <div className="card formCard mt">
+          <span className="label">Sign out</span>
+          <button className="btn ghost block" onClick={() => run(() => s.signOut(false))}>
+            Sign out (keep trips on this device)
+          </button>
+          <button
+            className="btn ghost block"
+            onClick={() => window.confirm('Sign out and remove your synced trips from this device? They stay in your account and come back when you sign in again.') && run(() => s.signOut(true))}
+          >
+            Sign out and remove trips from this device
+          </button>
+        </div>
+        <div className="card formCard dangerCard mt">
+          <span className="label">Delete account</span>
+          <div className="muted mb-s">Permanently deletes your account, your backed-up trips on our server, and any trips you shared with a join code. Trips on this device stay unless you erase them.</div>
+          <button
+            className="btn ghost danger"
+            onClick={() =>
+              window.confirm('Delete your account? This permanently deletes your account, your backed-up trips and any trips you shared. It cannot be undone.') &&
+              window.confirm('Really delete the account?') &&
+              run(async () => {
+                await s.deleteAccount();
+                setMsg('Your account was deleted.');
+              })
+            }
+          >
+            <Icon name="trash" size={16} /> Delete my account
+          </button>
+          {msg ? <div className="warn mb-s">{msg}</div> : null}
+        </div>
+      </>
+    );
+  }
+
+  // Apple requires Sign in with Apple wherever another social login is offered
+  const showApple = prov && prov.apple;
+  const showGoogle = prov && prov.google && (!isNative || prov.apple);
+  const none = prov && !prov.offline && !prov.email && !showApple && !showGoogle;
+  return (
+    <>
+      <div className="card formCard">
+        <span className="label">Account</span>
+        <div className="muted mb-s">An account is optional. Sign in to back up your trips and keep them in sync across your phone and tablet. We only store your email address and your trips.</div>
+        {!prov ? <div className="muted mb-s">Loading…</div> : null}
+        {prov && prov.offline ? <div className="warn mb-s">Could not reach the sign-in service. Check your connection.</div> : null}
+        {none ? <div className="warn mb-s">Sign-in is not available yet.</div> : null}
+        {showApple ? (
+          <button className="btn block" disabled={busy} onClick={() => run(() => authApi.oauth('apple'))}>
+            Continue with Apple
+          </button>
+        ) : null}
+        {showGoogle ? (
+          <button className="btn ghost block" disabled={busy} onClick={() => run(() => authApi.oauth('google'))}>
+            Continue with Google
+          </button>
+        ) : null}
+        {prov && prov.email ? (
+          <>
+            {(showApple || showGoogle) && <div className="muted" style={{ textAlign: 'center', margin: '4px 0 12px' }}>or use your email</div>}
+            {step === 'email' ? (
+              <>
+                <Field label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoCapitalize="none" autoCorrect="off" autoComplete="email" inputMode="email" />
+                <button
+                  className="btn ghost block"
+                  disabled={busy || !/^\S+@\S+\.\S+$/.test(email.trim())}
+                  onClick={() =>
+                    run(async () => {
+                      await authApi.emailCode(email);
+                      setStep('code');
+                    })
+                  }
+                >
+                  {busy ? 'Sending…' : 'Email me a sign-in code'}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="muted mb-s">We sent a code to {email.trim()}. Enter it below, or open the link in the email on this device.</div>
+                <Field label="Code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" inputMode="numeric" autoComplete="one-time-code" />
+                <button className="btn block" disabled={busy || code.replace(/\s/g, '').length < 6} onClick={() => run(() => authApi.verifyCode(email, code))}>
+                  {busy ? 'Checking…' : 'Sign in'}
+                </button>
+                <button className="btn ghost block" onClick={() => { setStep('email'); setCode(''); setMsg(''); }}>
+                  Use a different email
+                </button>
+              </>
+            )}
+          </>
+        ) : null}
+        {msg ? <div className="warn mb-s">{msg}</div> : null}
+      </div>
+    </>
+  );
+}
+
 const REMINDERS_KEY = 'riverguide.v1.reminders';
 
 function About({ s }) {
@@ -3466,7 +3777,7 @@ function About({ s }) {
 
       <div className="card formCard mt">
         <span className="label">Your data</span>
-        <div className="muted mb-s">Your trips are stored on this device. River Guide has no account. A trip is only sent to our server if you choose Share with crew, and then only that trip, under a random join code. Back up regularly: if you delete the app, local data goes with it.</div>
+        <div className="muted mb-s">Your trips are stored on this device. An account is optional: sign in (General → Account) to back trips up and sync them across your devices, or use Share with crew to send one trip to others under a random join code. Back up regularly if you do not use an account: deleting the app deletes local data.</div>
         <button className="btn ghost block" onClick={backup}>
           Back up all trips
         </button>
@@ -3516,7 +3827,7 @@ function About({ s }) {
 
       <div className="card formCard dangerCard mt">
         <span className="label">Erase</span>
-        <div className="muted mb-s">Deletes every trip and any rivers you added from this device.</div>
+        <div className="muted mb-s">Deletes every trip and any rivers you added from this device. If you are signed in, your backed-up trips return at the next sync; sign out first, or delete your account, to remove them from the server.</div>
         <button
           className="btn ghost danger"
           onClick={() => {
@@ -3532,11 +3843,11 @@ function About({ s }) {
   );
 }
 
-function General({ s }) {
-  const [tab, setTab] = useState(QS.get('sub') || 'Medical');
+function General({ s, initial }) {
+  const [tab, setTab] = useState(initial || QS.get('sub') || 'Medical');
   return (
     <>
-      <Tabs items={['Medical', 'Signals', 'Rescue', 'Swim', 'Gear', 'Card', 'About']} value={tab} onChange={setTab} tint="#9c3326" />
+      <Tabs items={['Medical', 'Signals', 'Rescue', 'Swim', 'Gear', 'Card', 'Account', 'About']} value={tab} onChange={setTab} tint="#9c3326" />
       <div className="pad">
         {tab === 'Medical' && <Medical />}
         {tab === 'Signals' && <Pairs data={GENERAL.signals} />}
@@ -3544,6 +3855,7 @@ function General({ s }) {
         {tab === 'Swim' && <Pairs data={GENERAL.swim} />}
         {tab === 'Gear' && <GearRef />}
         {tab === 'Card' && <Card s={s} />}
+        {tab === 'Account' && <Account s={s} />}
         {tab === 'About' && <About s={s} />}
       </div>
     </>
@@ -3775,7 +4087,7 @@ function JoinTrip({ s, initial, onDone, onCancel }) {
   );
 }
 
-function Trips({ s, preset, clearPreset, joinCode, clearJoin, onOpen }) {
+function Trips({ s, preset, clearPreset, joinCode, clearJoin, onOpen, onAccount }) {
   const [adding, setAdding] = useState(!!preset);
   const [joining, setJoining] = useState(!!joinCode);
   useEffect(() => {
@@ -3829,6 +4141,28 @@ function Trips({ s, preset, clearPreset, joinCode, clearJoin, onOpen }) {
           </button>
         </div>
       )}
+      {!s.session && !adding && s.trips.length > 0 && localStorage.getItem('riverguide.v1.hideBanner') !== '1' ? (
+        <div className="notice mt note">
+          <div className="noticeHead">
+            <Icon name="cloud" size={17} /> Back up your trips
+          </div>
+          <div className="muted mb-s">Create a free account to back up trips and keep them in sync on all your devices.</div>
+          <div className="row">
+            <button className="btn" onClick={onAccount}>
+              Create account
+            </button>
+            <button
+              className="btn ghost"
+              onClick={() => {
+                localStorage.setItem('riverguide.v1.hideBanner', '1');
+                s.activate(s.trip ? s.trip.id : s.trips[0].id); // re-render
+              }}
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      ) : null}
       {!s.trips.length && !adding ? (
         <Empty icon="calendar" title="No trips yet">
           Create a trip to start planning crew, gear, meals and shuttles.
@@ -4257,6 +4591,7 @@ function App() {
   const [browse, setBrowse] = useState(null); // river being browsed on the River tab (null = the trip's own)
   const [preset, setPreset] = useState(null); // river chosen from the library for a new trip
   const [joinCode, setJoinCode] = useState(''); // from a riverguide://join/CODE link
+  const [genSub, setGenSub] = useState(null); // open General on a given sub-tab (e.g. Account)
   const onMap = tab === 'River';
   const detail = tab === 'Trips' && inTrip && !!s.trip;
 
@@ -4264,6 +4599,10 @@ function App() {
 
   useEffect(() => {
     onOpenUrl((url) => {
+      if (/auth-callback/.test(url || '')) {
+        authApi.handleAuthUrl(url).then(() => setTab('General')).catch(() => {});
+        return;
+      }
       const m = /join\/([A-Za-z0-9-]+)/.exec(url || '');
       if (m) {
         setJoinCode(m[1]);
@@ -4310,7 +4649,7 @@ function App() {
           (detail ? (
             <Trip s={s} back={() => setInTrip(false)} />
           ) : (
-            <Trips s={s} preset={preset} clearPreset={() => setPreset(null)} joinCode={joinCode} clearJoin={() => setJoinCode('')} onOpen={() => setInTrip(true)} />
+            <Trips s={s} preset={preset} clearPreset={() => setPreset(null)} joinCode={joinCode} clearJoin={() => setJoinCode('')} onOpen={() => setInTrip(true)} onAccount={() => { setGenSub('Account'); setTab('General'); }} />
           ))}
         {tab === 'River' && (
           <River
@@ -4324,7 +4663,7 @@ function App() {
             }}
           />
         )}
-        {tab === 'General' && <General s={s} />}
+        {tab === 'General' && <General s={s} initial={genSub} />}
       </main>
 
       <nav className="tabbar">
