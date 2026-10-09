@@ -71,7 +71,7 @@ If you do have a Mac, `npm run ios:sync && npm run ios:open` opens the project i
 **What's New (1.0):** First release.
 
 ### App privacy questionnaire
-**Data Not Collected.** (No analytics, no accounts, no network requests.) Tracking: No.
+**Data Collected → User Content → Other User Content** (only for trips the user chooses to share): *not linked to the user, not used for tracking*, purpose *App Functionality*. Everything else: not collected. Tracking: No. (No accounts, no analytics, no identifiers.)
 
 ### Age rating
 Answer "None" to every content question → 4+. (Medical reference: choose *Infrequent/Mild Medical/Treatment Information* if asked.)
@@ -87,7 +87,7 @@ iPhone 6.9" (1320 × 2868) — 3 to 10 images. Suggested: Trips overview, Itiner
 - **Guideline 4.2 (minimum functionality):** web-wrapper apps are rejected when they feel like a website. This one is offline, stores data natively, and uses haptics, share sheet, files and local notifications. Keep adding native-feeling features if review pushes back (e.g. widgets, iCloud backup).
 - **Guideline 5.2 (intellectual property):** the Grand Canyon camp, rapid and hike data and the species guide were compiled from outside sources (river maps, guidebooks, agency pages). Before publishing, confirm you have the right to redistribute each source, and add attribution in General → About → Safety & sources. Remove or rewrite anything you cannot clear.
 - **Guideline 1.4.1 (medical):** disclaimer added; consider citing the source texts for the medical pages.
-- **Sharing with a crew:** the website version could sync trips between devices when run inside Claude; the native app has no sync. A crew-sync feature needs a backend and accounts (and then Sign in with Apple, in-app account deletion and a revised privacy policy). Not included in 1.0.
+- **Crew sync backend:** trips shared with a crew are stored in a Supabase project (`river-guide-sync`, free plan) under an unguessable join code, no accounts. A daily GitHub Action keeps the free project from pausing; move it to the Pro plan ($25/month) before launch so it can never pause. Anyone with a code can edit that trip, which is stated in the app and the privacy policy.
 - **Private data in git history:** earlier commits of this public repo contain the real Grand Canyon trip (crew names, payments). The store build excludes it, but the repo and the website still publish it. Make the repo private (note: GitHub Pages then needs a paid plan) or move the private trip file out and rewrite history if that matters.
 
 ## Releasing updates

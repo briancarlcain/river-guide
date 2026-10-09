@@ -59,7 +59,7 @@ const web = `<meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">`;
 const app = `<meta name="format-detection" content="telephone=no">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' capacitor: data: blob: 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' capacitor:">`;
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' capacitor: data: blob: 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' capacitor: https://nhplgoetehrydaeoyrgz.supabase.co">`;
 
 const html = `<!doctype html>
 <html lang="en">

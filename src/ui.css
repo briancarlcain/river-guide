@@ -278,3 +278,7 @@ select:required:invalid { color: var(--ink-faint); }
 #mapHeader .fbtn { min-height: 38px; font-size: 11px; }
 #mapHeader .fsum { font-size: 10.5px; }
 .gcmap #mapHeader { top: calc(59px + env(safe-area-inset-top)); }
+
+/* crew sync */
+.rg .syncCode { font-family: 'Oswald', sans-serif; font-size: 22px; font-weight: 600; letter-spacing: .12em; color: var(--ink); background: var(--surface); border: 1px dashed rgba(74, 42, 18, .35); border-radius: var(--r-s); padding: 12px 10px; text-align: center; margin-bottom: 10px; user-select: all; -webkit-user-select: all; }
+.rg .muted .ico { vertical-align: -2px; }

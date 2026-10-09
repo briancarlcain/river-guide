@@ -7,7 +7,8 @@
     "build": "node build.mjs",
     "build:app": "node build.mjs app",
     "ios:sync": "node build.mjs app && cap sync ios",
-    "ios:open": "cap open ios"
+    "ios:open": "cap open ios",
+    "test": "node test/merge.test.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.2",
@@ -28,5 +29,6 @@
     "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.5.3",
     "esbuild": "^0.25.0"
-  }
+  },
+  "type": "module"
 }

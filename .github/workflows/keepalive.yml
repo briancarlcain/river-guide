@@ -1,0 +1,18 @@
+# Supabase free-tier projects pause after about a week with no activity, which would
+# break crew sync. This pings the project once a day. (Upgrading the project to Pro
+# removes the pause entirely and is the better fix once the app has real users.)
+name: Sync keep-alive
+on:
+  schedule:
+    - cron: '17 13 * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call share_get with an unused code
+        run: |
+          curl -fsS -X POST 'https://nhplgoetehrydaeoyrgz.supabase.co/rest/v1/rpc/share_get' \
+            -H 'apikey: sb_publishable_eJ0X3vnbOK09gLhPigYiSQ_TWnyQrk3' \
+            -H 'Content-Type: application/json' \
+            -d '{"p_code":"KEEPALIVE2345678","p_have":0}'

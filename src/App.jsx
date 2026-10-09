@@ -5,7 +5,9 @@ import GENERAL from '../data/general.json';
 import GEAR_ALL from '../data/gear.json';
 import SEED from '../data/trip.json';
 import GC_REF from '../data/trips/gc2026-ref.json';
-import { askReminders, boot, clearReminders, hideSplash, isNative, openUrl, remindersAllowed, saveBackup, scheduleReminders, shareText, success } from './native.js';
+import { askReminders, boot, clearReminders, hideSplash, isNative, onOpenUrl, onResume, openUrl, remindersAllowed, saveBackup, scheduleReminders, shareText, success } from './native.js';
+import { canon, mergeTrips, stamp } from './merge.js';
+import * as remote from './sync.js';
 
 // set by build.mjs: the App Store build ships a fictional sample trip, never the crew's real one
 const IS_STORE = typeof __STORE__ !== 'undefined' && __STORE__;
@@ -50,6 +52,8 @@ const ICONS = {
   pin: 'M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12zM12 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5',
   inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z',
   check: 'M20 6L9 17l-5-5',
+  cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z',
+  refresh: 'M21 12a9 9 0 0 0-15-6.7L3 8M3 3v5h5M3 12a9 9 0 0 0 15 6.7L21 16M21 21v-5h-5',
   alert: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
 };
 const Icon = ({ name, size = 18, className = '' }) => (
@@ -184,6 +188,19 @@ function mergeSeed(have) {
   return { ...next, at: now() };
 }
 
+// small string hash (cyrb53): enough to tell whether a trip changed since the last sync
+function hash53(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36) + ':' + str.length;
+}
+
 function useStore() {
   const [state, setState] = useState(() => {
     let st = { trips: [], active: null, rivers: {} };
@@ -211,78 +228,166 @@ function useStore() {
     st.rivers = st.rivers || {};
     return st;
   });
-  const [db, setDb] = useState(null);
-  const [shared, setShared] = useState(false);
-  const seen = useRef(new Set());
+  const stateRef = useRef(state);
+  const busy = useRef(new Set());
+  const timers = useRef({});
+  const [status, setStatus] = useState({}); // tripId -> 'ok' | 'busy' | 'offline' | 'gone'
+  const setSt = (id, v) => setStatus((m) => (m[id] === v ? m : { ...m, [id]: v }));
 
+  // every state change goes through here so async sync code always sees the latest state
   const persist = useCallback((next) => {
+    stateRef.current = next;
     setState(next);
     try {
       localStorage.setItem(LOCAL, JSON.stringify(next));
     } catch {}
   }, []);
+  const commit = useCallback((fn) => persist(fn(stateRef.current)), [persist]);
+
+  const hashOf = (d) => {
+    const { _river, ...rest } = d;
+    return hash53(canon(rest));
+  };
+  const withRiver = (doc) => {
+    const id = doc.river || DEFAULT_RIVER;
+    const custom = stateRef.current.rivers[id];
+    return custom ? { ...doc, _river: custom } : doc;
+  };
+  // adopt a custom river that came along with a shared trip
+  const adoptRiver = (s0, doc) => (doc._river && doc._river.id && !BUILTIN_RIVERS[doc._river.id] && !s0.rivers[doc._river.id] ? { ...s0.rivers, [doc._river.id]: doc._river } : s0.rivers);
+
+  const syncTrip = useCallback(async (id) => {
+    const ent = (stateRef.current.sync || {})[id];
+    const local = stateRef.current.trips.find((t) => t.id === id);
+    if (!ent || !local || busy.current.has(id)) return;
+    busy.current.add(id);
+    setSt(id, 'busy');
+    try {
+      let version = ent.version || 0;
+      let doc = local;
+      let known = ent.h; // canonical form of the copy the server holds
+      const g = await remote.get(ent.code, version);
+      if (g && g.missing) return setSt(id, 'gone');
+      if (g && g.data) {
+        doc = mergeTrips(doc, g.data);
+        version = g.version;
+        known = hashOf(g.data);
+      }
+      if (hashOf(doc) !== known) {
+        let done = false;
+        for (let i = 0; i < 4 && !done; i++) {
+          const r = await remote.put(ent.code, version, withRiver(doc));
+          if (r.missing) return setSt(id, 'gone');
+          if (r.conflict) {
+            doc = mergeTrips(doc, r.data);
+            version = r.version;
+          } else {
+            version = r.version;
+            known = hashOf(doc);
+            done = true;
+          }
+        }
+        if (!done) throw new Error('busy');
+      }
+      commit((s0) => {
+        const cur = s0.trips.find((t) => t.id === id);
+        if (!cur) return s0;
+        const { _river: _r, ...merged } = mergeTrips(cur, doc);
+        return {
+          ...s0,
+          trips: s0.trips.map((t) => (t.id === id ? merged : t)),
+          rivers: adoptRiver(s0, doc),
+          sync: { ...s0.sync, [id]: { ...(s0.sync || {})[id], version, h: known } },
+        };
+      });
+      setSt(id, 'ok');
+    } catch {
+      setSt(id, 'offline');
+    } finally {
+      busy.current.delete(id);
+    }
+  }, [commit]);
+
+  const syncAll = useCallback(() => Object.keys(stateRef.current.sync || {}).forEach((id) => syncTrip(id)), [syncTrip]);
+  const syncSoon = (id) => {
+    clearTimeout(timers.current[id]);
+    timers.current[id] = setTimeout(() => syncTrip(id), 1500);
+  };
 
   useEffect(() => {
-    let off = [];
-    window.claude?.use?.('db').then((d) => {
-      if (!d) return;
-      setDb(d);
-      setShared(true);
-      off.push(
-        d.collection('trips').onSnapshot((snap) => {
-          setState((s) => {
-            const byId = new Map(s.trips.map((t) => [t.id, t]));
-            snap.docs.forEach((doc) => {
-              const remote = doc.data();
-              const local = byId.get(remote.id);
-              if (!local || (remote.at || 0) > (local.at || 0)) byId.set(remote.id, { ...local, ...remote });
-            });
-            const next = { ...s, trips: [...byId.values()] };
-            next.active = next.active || next.trips[0]?.id || null;
-            try {
-              localStorage.setItem(LOCAL, JSON.stringify(next));
-            } catch {}
-            return next;
-          });
-        }, () => {}),
-        d.collection('rivers').onSnapshot((snap) => {
-          setState((s) => {
-            const rivers = { ...s.rivers };
-            snap.docs.forEach((doc) => {
-              const remote = doc.data();
-              if (!rivers[remote.id] || (remote.at || 0) > (rivers[remote.id].at || 0)) rivers[remote.id] = remote;
-            });
-            const next = { ...s, rivers };
-            try {
-              localStorage.setItem(LOCAL, JSON.stringify(next));
-            } catch {}
-            return next;
-          });
-        }, () => {})
-      );
-    });
-    return () => off.forEach((f) => f && f());
-  }, []);
+    syncAll();
+    const iv = setInterval(() => document.visibilityState !== 'hidden' && syncAll(), 20000);
+    onResume(syncAll);
+    return () => clearInterval(iv);
+  }, [syncAll]);
 
   const trips = state.trips;
   const trip = trips.find((t) => t.id === state.active) || null;
 
-  const write = (t) => {
-    if (db) db.doc('trips/' + t.id).set(t).catch(() => {});
-  };
-
   const edit = (fn) => {
     if (!trip) return;
-    const next = { ...fn({ ...trip }), at: now() };
-    persist({ ...state, trips: trips.map((t) => (t.id === next.id ? next : t)) });
-    write(next);
+    const t0 = now();
+    const next = stamp(trip, { ...fn({ ...trip }), at: t0 }, t0);
+    persist({ ...stateRef.current, trips: stateRef.current.trips.map((t) => (t.id === next.id ? next : t)) });
+    if ((stateRef.current.sync || {})[next.id]) syncSoon(next.id);
+  };
+
+  const shareTrip = async (id) => {
+    const t = stateRef.current.trips.find((x) => x.id === id);
+    if (!t) throw new Error('no trip');
+    const code = remote.newCode();
+    const owner = remote.newSecret();
+    await remote.create(code, owner, withRiver(t));
+    commit((s0) => ({ ...s0, sync: { ...(s0.sync || {}), [id]: { code, owner, version: 1, h: hashOf(t) } } }));
+    setSt(id, 'ok');
+    return code;
+  };
+  const joinTrip = async (raw) => {
+    const code = remote.cleanCode(raw);
+    if (!code) throw new Error('That code does not look right. It has 16 letters and numbers.');
+    const g = await remote.get(code, 0);
+    if (!g || g.missing || !g.data) throw new Error('No trip found for that code.');
+    const { _river, ...doc } = g.data;
+    const ent = { code, version: g.version, h: hashOf(g.data) };
+    commit((s0) => {
+      const have = s0.trips.find((t) => t.id === doc.id);
+      const { _river: _r2, ...merged } = have ? mergeTrips(have, g.data) : { crew: [], boats: [], cars: [], places: [], gear: [], meals: [], log: [], pay: [], plans: {}, ...doc };
+      return {
+        ...s0,
+        trips: [merged, ...s0.trips.filter((t) => t.id !== doc.id)],
+        active: doc.id,
+        rivers: adoptRiver(s0, g.data),
+        sync: { ...(s0.sync || {}), [doc.id]: ent },
+      };
+    });
+    setSt(doc.id, 'ok');
+    syncTrip(doc.id);
+    return doc.id;
+  };
+  const stopSharing = async (id) => {
+    const ent = (stateRef.current.sync || {})[id];
+    if (!ent) return;
+    if (ent.owner) await remote.del(ent.code, ent.owner); // removes the server copy for everyone
+    commit((s0) => {
+      const { [id]: _gone, ...rest } = s0.sync || {};
+      return { ...s0, sync: rest };
+    });
+    setStatus((m) => {
+      const { [id]: _g, ...rest } = m;
+      return rest;
+    });
   };
 
   return {
     trips,
     trip,
-    shared,
     rivers: state.rivers,
+    sync: state.sync || {},
+    syncStatus: status,
+    syncNow: syncTrip,
+    shareTrip,
+    joinTrip,
+    stopSharing,
     // all rivers (built-in + added/edited), built-ins first
     riverList: () => {
       const ids = [...Object.keys(BUILTIN_RIVERS), ...Object.keys(state.rivers).filter((k) => !BUILTIN_RIVERS[k])];
@@ -290,31 +395,29 @@ function useStore() {
     },
     // merge a backup file into the current state (newer copy of a trip wins)
     restore: (data) => {
-      const byId = new Map(trips.map((t) => [t.id, t]));
+      const st = stateRef.current;
+      const byId = new Map(st.trips.map((t) => [t.id, t]));
       const incoming = (data.trips || []).filter((t) => t && t.id && t.name);
       incoming.forEach((t) => {
         const o = byId.get(t.id);
         if (!o || (t.at || 0) > (o.at || 0)) byId.set(t.id, { crew: [], boats: [], cars: [], places: [], gear: [], meals: [], log: [], pay: [], plans: {}, ...t });
       });
       const list = [...byId.values()];
-      persist({ ...state, trips: list, rivers: { ...state.rivers, ...(data.rivers || {}) }, active: state.active || list[0]?.id || null });
-      incoming.forEach(write);
+      persist({ ...st, trips: list, rivers: { ...st.rivers, ...(data.rivers || {}) }, active: st.active || list[0]?.id || null });
       return incoming.length;
     },
-    wipe: () => persist({ trips: [], active: null, rivers: {} }),
+    wipe: () => persist({ trips: [], active: null, rivers: {}, sync: {} }),
     riverRec: (id) => state.rivers[id] || BUILTIN_RIVERS[id] || { id, name: 'Unknown river' },
     saveRiver: (r) => {
       const rec = { ...r, id: r.id || uid(), at: now() };
-      persist({ ...state, rivers: { ...state.rivers, [rec.id]: rec } });
-      if (db) db.doc('rivers/' + rec.id).set(rec).catch(() => {});
+      persist({ ...stateRef.current, rivers: { ...stateRef.current.rivers, [rec.id]: rec } });
       return rec.id;
     },
     dropRiver: (id) => {
-      const { [id]: _gone, ...rest } = state.rivers;
-      persist({ ...state, rivers: rest });
-      if (db) db.doc('rivers/' + id).delete().catch(() => {});
+      const { [id]: _gone, ...rest } = stateRef.current.rivers;
+      persist({ ...stateRef.current, rivers: rest });
     },
-    activate: (id) => persist({ ...state, active: id }),
+    activate: (id) => persist({ ...stateRef.current, active: id }),
     create: (t) => {
       const next = {
         id: uid(),
@@ -331,13 +434,13 @@ function useStore() {
         at: now(),
         ...t,
       };
-      persist({ ...state, trips: [next, ...trips], active: next.id });
-      write(next);
+      persist({ ...stateRef.current, trips: [next, ...stateRef.current.trips], active: next.id });
     },
     remove: (id) => {
-      const list = trips.filter((t) => t.id !== id);
-      persist({ ...state, trips: list, active: id === state.active ? list[0]?.id ?? null : state.active });
-      if (db) db.doc('trips/' + id).delete().catch(() => {});
+      const st = stateRef.current;
+      const list = st.trips.filter((t) => t.id !== id);
+      const { [id]: _gone, ...sync } = st.sync || {}; // removing a trip only leaves the shared copy; use Stop sharing to delete it
+      persist({ ...st, trips: list, sync, active: id === st.active ? list[0]?.id ?? null : st.active });
     },
     set: (patch) => edit((t) => ({ ...t, ...patch })),
     push: (key, item) => edit((t) => ({ ...t, [key]: [...(t[key] || []), { id: uid(), ...item }] })),
@@ -2383,6 +2486,70 @@ function Log({ s }) {
   );
 }
 
+function SyncCard({ s, t }) {
+  const ent = s.sync[t.id];
+  const st = s.syncStatus[t.id];
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const invite = (code) => `Join my river trip "${t.name}" in River Guide.\n\nOpen the app → Trips → Join a trip, and enter this code:\n${remote.showCode(code)}\n\nOr tap: riverguide://join/${code}`;
+  const start = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const code = await s.shareTrip(t.id);
+      success();
+      await shareText(t.name, invite(code));
+    } catch (e) {
+      setMsg(netMsg(e));
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="card formCard mt">
+      <span className="label">Crew sync</span>
+      {!ent ? (
+        <>
+          <div className="muted mb-s">Share this trip with your crew. Everyone you give the code to can edit the same trip, and changes appear on all devices. Needs an internet connection to sync; the app still works offline.</div>
+          <button className="btn" disabled={busy} onClick={start}>
+            <Icon name="users" size={16} /> {busy ? 'Sharing…' : 'Share with crew'}
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="syncCode" aria-label="Join code">{remote.showCode(ent.code)}</div>
+          <div className="muted mb-s">
+            <Icon name="cloud" size={14} /> {syncLabel(st, !!ent.owner)}. Anyone with this code can view and edit the trip.
+          </div>
+          <div className="row">
+            <button className="btn" onClick={() => shareText(t.name, invite(ent.code))}>
+              Invite crew
+            </button>
+            <button className="btn ghost" onClick={() => s.syncNow(t.id)}>
+              <Icon name="refresh" size={16} /> Sync now
+            </button>
+          </div>
+          <button
+            className="btn ghost danger"
+            onClick={async () => {
+              const owner = !!ent.owner;
+              if (!window.confirm(owner ? 'Stop sharing? The shared copy is deleted from the server and crew members keep only the copy already on their device.' : 'Leave this shared trip? You keep your copy but it stops syncing.')) return;
+              try {
+                await s.stopSharing(t.id);
+                setMsg('');
+              } catch (e) {
+                setMsg(netMsg(e));
+              }
+            }}
+          >
+            {ent.owner ? 'Stop sharing' : 'Leave shared trip'}
+          </button>
+        </>
+      )}
+      {msg ? <div className="warn mb-s">{msg}</div> : null}
+    </div>
+  );
+}
+
 function tripSummary(t, riverName) {
   const days = tripDays(t);
   const lines = [t.name, `${riverName} · ${okDate(t.start) ? fmt(t.start) + ' ' + t.start.slice(0, 4) : t.start} · ${t.days + 1} days`, ''];
@@ -2437,8 +2604,10 @@ function Settings({ s, back }) {
         </div>
       )}
 
+      <SyncCard s={s} t={t} />
+
       <div className="card formCard mt">
-        <span className="label">Share</span>
+        <span className="label">Summary</span>
         <div className="muted mb-s">Send a plain-text summary of this trip (dates, crew, camps) with Messages, Mail or Notes.</div>
         <button
           className="btn ghost"
@@ -3267,7 +3436,7 @@ function About({ s }) {
 
       <div className="card formCard mt">
         <span className="label">Your data</span>
-        <div className="muted mb-s">Everything you enter stays on this device. River Guide has no account and does not collect or send your information. Back up regularly: if you delete the app, the data goes with it.</div>
+        <div className="muted mb-s">Your trips are stored on this device. River Guide has no account. A trip is only sent to our server if you choose Share with crew, and then only that trip, under a random join code. Back up regularly: if you delete the app, local data goes with it.</div>
         <button className="btn ghost block" onClick={backup}>
           Back up all trips
         </button>
@@ -3508,6 +3677,8 @@ function NewTrip({ s, preset, onDone, onCancel }) {
   );
 }
 
+const syncLabel = (st, owner) => ({ busy: 'Syncing…', ok: owner ? 'Shared · up to date' : 'Shared with you · up to date', offline: 'Shared · offline, will sync later', gone: 'Sharing was stopped' }[st] || (owner ? 'Shared' : 'Shared with you'));
+
 function tripStatus(t) {
   if (!okDate(t.start)) return null;
   const toStart = dnum(t.start, today());
@@ -3517,11 +3688,76 @@ function tripStatus(t) {
   return { cls: 'done', text: 'Completed' };
 }
 
-function Trips({ s, preset, clearPreset, onOpen }) {
+const netMsg = (e) => (/Failed to fetch|NetworkError|Load failed|network/i.test(String((e && e.message) || e)) ? 'No internet connection. Try again when you are online.' : (e && e.message) || 'Something went wrong.');
+
+function JoinTrip({ s, initial, onDone, onCancel }) {
+  const [code, setCode] = useState(initial || '');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const join = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      await s.joinTrip(code);
+      success();
+      onDone();
+    } catch (e) {
+      setErr(netMsg(e));
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="pad">
+      <h1>Join a trip</h1>
+      <div className="muted mb-s">Enter the 16-character code from the person who shared the trip with you.</div>
+      <Field
+        label="Join code"
+        value={code}
+        onChange={(e) => setCode(e.target.value)}
+        placeholder="XXXX-XXXX-XXXX-XXXX"
+        autoCapitalize="characters"
+        autoCorrect="off"
+        autoComplete="off"
+        spellCheck={false}
+      />
+      {err ? <div className="warn mb-s">{err}</div> : null}
+      <div className="row">
+        <button className="btn" disabled={busy || !remote.cleanCode(code)} onClick={join}>
+          {busy ? 'Joining…' : 'Join trip'}
+        </button>
+        <button className="btn ghost" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Trips({ s, preset, clearPreset, joinCode, clearJoin, onOpen }) {
   const [adding, setAdding] = useState(!!preset);
+  const [joining, setJoining] = useState(!!joinCode);
+  useEffect(() => {
+    if (joinCode) setJoining(true);
+  }, [joinCode]);
   useEffect(() => {
     if (preset) setAdding(true);
   }, [preset]);
+  if (joining)
+    return (
+      <JoinTrip
+        s={s}
+        initial={joinCode}
+        onCancel={() => {
+          setJoining(false);
+          clearJoin();
+        }}
+        onDone={() => {
+          setJoining(false);
+          clearJoin();
+          onOpen();
+        }}
+      />
+    );
   const rivers = s.riverList();
   const rname = (id) => rivers.find((r) => r.id === id)?.name || 'Unknown river';
   const groups = [...new Set(s.trips.map(riverOf))];
@@ -3542,9 +3778,14 @@ function Trips({ s, preset, clearPreset, onOpen }) {
           }}
         />
       ) : (
-        <button className="btn block" onClick={() => setAdding(true)}>
-          <Icon name="plus" size={16} /> New trip
-        </button>
+        <div className="row">
+          <button className="btn" onClick={() => setAdding(true)}>
+            <Icon name="plus" size={16} /> New trip
+          </button>
+          <button className="btn ghost" onClick={() => setJoining(true)}>
+            <Icon name="users" size={16} /> Join a trip
+          </button>
+        </div>
       )}
       {!s.trips.length && !adding ? (
         <Empty icon="calendar" title="No trips yet">
@@ -3572,6 +3813,12 @@ function Trips({ s, preset, clearPreset, onOpen }) {
                     <Icon name="users" size={15} />
                     {(t.crew || []).length} people · {t.days} days
                   </span>
+                  {s.sync[t.id] ? (
+                    <span>
+                      <Icon name="cloud" size={15} />
+                      {syncLabel(s.syncStatus[t.id], !!s.sync[t.id].owner)}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="row mt">
                   <button
@@ -3967,10 +4214,22 @@ function App() {
   const [inTrip, setInTrip] = useState(false); // Trips tab: false = overview list, true = inside the active trip
   const [browse, setBrowse] = useState(null); // river being browsed on the River tab (null = the trip's own)
   const [preset, setPreset] = useState(null); // river chosen from the library for a new trip
+  const [joinCode, setJoinCode] = useState(''); // from a riverguide://join/CODE link
   const onMap = tab === 'River';
   const detail = tab === 'Trips' && inTrip && !!s.trip;
 
   useEffect(() => setBrowse(null), [s.trip?.id]);
+
+  useEffect(() => {
+    onOpenUrl((url) => {
+      const m = /join\/([A-Za-z0-9-]+)/.exec(url || '');
+      if (m) {
+        setJoinCode(m[1]);
+        setInTrip(false);
+        setTab('Trips');
+      }
+    });
+  }, []);
 
   // keep trip reminders in step with the trip list (only if the user opted in)
   useEffect(() => {
@@ -4009,7 +4268,7 @@ function App() {
           (detail ? (
             <Trip s={s} back={() => setInTrip(false)} />
           ) : (
-            <Trips s={s} preset={preset} clearPreset={() => setPreset(null)} onOpen={() => setInTrip(true)} />
+            <Trips s={s} preset={preset} clearPreset={() => setPreset(null)} joinCode={joinCode} clearJoin={() => setJoinCode('')} onOpen={() => setInTrip(true)} />
           ))}
         {tab === 'River' && (
           <River

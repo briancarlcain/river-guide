@@ -168,3 +168,19 @@ export async function scheduleReminders(trips) {
     return 0;
   }
 }
+
+/* ---------- app lifecycle ---------- */
+// call cb whenever the app comes back to the foreground
+export function onResume(cb) {
+  if (isNative) CapApp.addListener('appStateChange', (st) => st.isActive && cb()).catch(() => {});
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && cb());
+}
+// riverguide://join/CODE links (also delivered when the app is launched by one)
+export async function onOpenUrl(cb) {
+  if (!isNative) return;
+  CapApp.addListener('appUrlOpen', (e) => cb(e.url)).catch(() => {});
+  try {
+    const l = await CapApp.getLaunchUrl();
+    if (l && l.url) cb(l.url);
+  } catch {}
+}
