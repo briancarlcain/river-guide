@@ -88,27 +88,28 @@ export async function shareText(title, text) {
   }
 }
 
-// Save a JSON backup: on a device write it to the cache and open the share sheet
-// (Save to Files, AirDrop, Mail...); in a browser download it.
-export async function saveBackup(filename, json) {
+// Save a file: on a device write it to the cache and open the share sheet (Save to Files,
+// AirDrop, Mail, Calendar for .ics...); in a browser download it.
+export async function saveFile(filename, text, mime = 'application/json') {
   if (isNative) {
     try {
       const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
-      const w = await Filesystem.writeFile({ path: filename, data: json, directory: Directory.Cache, encoding: Encoding.UTF8 });
-      await Share.share({ title: filename, url: w.uri, dialogTitle: 'Save River Guide backup' });
+      const w = await Filesystem.writeFile({ path: filename, data: text, directory: Directory.Cache, encoding: Encoding.UTF8 });
+      await Share.share({ title: filename, url: w.uri, dialogTitle: filename });
       return true;
     } catch {
       return false;
     }
   }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([text], { type: mime }));
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   return true;
 }
+export const saveBackup = (filename, json) => saveFile(filename, json, 'application/json');
 
 export const openUrl = (url) => {
   if (isNative) CapApp.openUrl({ url }).catch(() => window.open(url, '_blank'));

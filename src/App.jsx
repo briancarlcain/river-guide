@@ -4,8 +4,9 @@ import { BUILTIN_RIVERS, DEFAULT_RIVER, normalizeRiver } from './rivers.js';
 import GENERAL from '../data/general.json';
 import GEAR_ALL from '../data/gear.json';
 import SEED from '../data/trip.json';
+import SOURCES from '../data/sources.json';
 import GC_REF from '../data/trips/gc2026-ref.json';
-import { askReminders, boot, clearReminders, hideSplash, isNative, onOpenUrl, onResume, openUrl, remindersAllowed, saveBackup, scheduleReminders, shareText, success } from './native.js';
+import { askReminders, boot, clearReminders, hideSplash, isNative, onOpenUrl, onResume, openUrl, remindersAllowed, saveBackup, saveFile, scheduleReminders, shareText, success } from './native.js';
 import { canon, mergeTrips, stamp } from './merge.js';
 import * as remote from './sync.js';
 
@@ -90,6 +91,7 @@ const Empty = ({ icon = 'inbox', title, children }) => (
   </div>
 );
 
+const QS = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const now = () => Date.now();
 const KINDS = ['crew', 'boats', 'cars', 'places', 'gear', 'meals', 'log', 'pay', 'plans'];
@@ -506,7 +508,7 @@ const Field = ({ label, area, ...p }) => (
 /* ---------- trip ---------- */
 
 function Trip({ s, back }) {
-  const [tab, setTab] = useState('Itinerary');
+  const [tab, setTab] = useState(QS.get('sub') || 'Itinerary');
   if (!s.trip) return <NewTrip s={s} />;
   const panels = { Itinerary, 'Crew & Crafts': Crew, Meals, Gear, Shuttle, Ledger, Log, Info, Settings };
   const P = panels[tab];
@@ -2550,6 +2552,26 @@ function SyncCard({ s, t }) {
   );
 }
 
+// iCalendar file for a trip: one all-day event per day (camp and mileage) plus the whole trip
+const icsEsc = (x) => String(x).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+function tripICS(t, riverName) {
+  const ymd = (iso) => iso.replace(/-/g, '');
+  const stampNow = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
+  const ev = (uid, date, endDate, summary, desc) =>
+    ['BEGIN:VEVENT', `UID:${uid}@river-guide`, `DTSTAMP:${stampNow}`, `DTSTART;VALUE=DATE:${ymd(date)}`, `DTEND;VALUE=DATE:${ymd(endDate)}`, `SUMMARY:${icsEsc(summary)}`, desc ? `DESCRIPTION:${icsEsc(desc)}` : null, 'END:VEVENT'].filter(Boolean).join('\r\n');
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//River Guide//EN', 'CALSCALE:GREGORIAN', `X-WR-CALNAME:${icsEsc(t.name)}`];
+  if (okDate(t.start)) {
+    lines.push(ev(t.id + '-trip', t.start, addDays(t.start, t.days + 1), `${t.name} (${riverName})`, `${(t.crew || []).length} people, ${t.days + 1} days`));
+    tripDays(t).forEach((d) => {
+      const p = (t.plans || {})[d.i] || {};
+      if (!p.camp && !p.note) return;
+      lines.push(ev(`${t.id}-d${d.i}`, d.date, addDays(d.date, 1), `Day ${d.i + 1}${p.camp ? ': ' + p.camp : ''}`, [p.camp && p.mile != null ? `Camp at mile ${p.mile}` : '', p.note || ''].filter(Boolean).join('\n')));
+    });
+  }
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n') + '\r\n';
+}
+
 function tripSummary(t, riverName) {
   const days = tripDays(t);
   const lines = [t.name, `${riverName} · ${okDate(t.start) ? fmt(t.start) + ' ' + t.start.slice(0, 4) : t.start} · ${t.days + 1} days`, ''];
@@ -2607,6 +2629,14 @@ function Settings({ s, back }) {
       <SyncCard s={s} t={t} />
 
       <div className="card formCard mt">
+        <span className="label">Calendar</span>
+        <div className="muted mb-s">Add the trip and each day's camp to your calendar.</div>
+        <button className="btn ghost" onClick={() => saveFile(`${slug(t.name)}.ics`, tripICS(t, s.riverRec(riverOf(t)).name), 'text/calendar')}>
+          <Icon name="calendar" size={16} /> Add to Calendar
+        </button>
+      </div>
+
+      <div className="card formCard mt">
         <span className="label">Summary</span>
         <div className="muted mb-s">Send a plain-text summary of this trip (dates, crew, camps) with Messages, Mail or Notes.</div>
         <button
@@ -2641,7 +2671,7 @@ function Settings({ s, back }) {
 /* ---------- river ---------- */
 
 function River({ s, browse, onBrowse, onPlan }) {
-  const [tab, setTab] = useState('Map');
+  const [tab, setTab] = useState(QS.get('sub') || 'Map');
   const P = { Rapids, Camps, Hikes, Geology, Guide, Almanac, Rules }[tab];
   // the trip's camp plan only means something on the trip's own river
   const sm = riverOf(s.trip) === RIVER.id ? s : { ...s, trip: null };
@@ -3462,6 +3492,18 @@ function About({ s }) {
         <div className="muted mb-s">River, camp and hike information is compiled from public agency publications (such as the National Park Service) and community knowledge. It can be out of date or wrong. Medical and rescue pages are general reference only. Always confirm current regulations, flows and conditions with the managing agency, and carry a satellite communicator.</div>
       </div>
 
+      {SOURCES.some((x) => x.confirmed) && (
+        <div className="card formCard mt">
+          <span className="label">Sources &amp; credits</span>
+          {SOURCES.filter((x) => x.confirmed).map((x, i) => (
+            <div className="pair" key={i}>
+              <div className="pairKey">{x.title}</div>
+              {x.note ? <div className="line">{x.note}</div> : null}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="card formCard mt">
         <span className="label">Help</span>
         <button className="btn ghost block" onClick={() => openUrl(POLICY_URL)}>
@@ -3491,7 +3533,7 @@ function About({ s }) {
 }
 
 function General({ s }) {
-  const [tab, setTab] = useState('Medical');
+  const [tab, setTab] = useState(QS.get('sub') || 'Medical');
   return (
     <>
       <Tabs items={['Medical', 'Signals', 'Rescue', 'Swim', 'Gear', 'Card', 'About']} value={tab} onChange={setTab} tint="#9c3326" />
@@ -4210,8 +4252,8 @@ const TABS = [
 
 function App() {
   const s = useStore();
-  const [tab, setTab] = useState('Trips');
-  const [inTrip, setInTrip] = useState(false); // Trips tab: false = overview list, true = inside the active trip
+  const [tab, setTab] = useState(QS.get('tab') || 'Trips');
+  const [inTrip, setInTrip] = useState(QS.get('open') === '1'); // Trips tab: false = overview list, true = inside the active trip
   const [browse, setBrowse] = useState(null); // river being browsed on the River tab (null = the trip's own)
   const [preset, setPreset] = useState(null); // river chosen from the library for a new trip
   const [joinCode, setJoinCode] = useState(''); // from a riverguide://join/CODE link
@@ -4304,6 +4346,13 @@ function App() {
   );
 }
 
+if (QS.get('shot')) {
+  document.body.classList.add('shot');
+  const f = document.createElement('div');
+  f.id = 'fakeStatus';
+  f.innerHTML = '<span>9:41</span><span class="ind"><svg width="18" height="12" viewBox="0 0 18 12" fill="#1b130c"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2.5" width="3" height="9.5" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg><svg width="26" height="12" viewBox="0 0 26 12"><rect x=".5" y=".5" width="22" height="11" rx="3.5" fill="none" stroke="#1b130c" opacity=".5"/><rect x="2" y="2" width="19" height="8" rx="2.5" fill="#1b130c"/><rect x="24" y="4" width="2" height="4" rx="1" fill="#1b130c" opacity=".5"/></svg></span>';
+  document.body.appendChild(f);
+}
 boot().finally(() => {
   createRoot(document.getElementById('root')).render(<App />);
   setTimeout(hideSplash, 150);
